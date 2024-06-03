@@ -30,6 +30,11 @@ class ExpertArchitecture(ModelArchitecture):
 
 
 @dataclass(kw_only=True)
+class MixtralArchitecture(ModelArchitecture):
+    None
+
+
+@dataclass(kw_only=True)
 class ModelParallelism():
     """
     Captures the different parallelisms of a Model.

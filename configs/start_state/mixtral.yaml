@@ -1,0 +1,5 @@
+# see splitwise.yaml - but allocate expert and attn layers
+# read by startstate.py
+_target_: model.MixtralArchitecture
+name: mixtral
+num_layers: 32

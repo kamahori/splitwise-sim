@@ -256,41 +256,151 @@ class DatabasePerformanceModel(PerformanceModel):
         return iteration_time
 
 
-class AttentionPerformanceModel(PerformanceModel):
+class MOEPerformanceModel(PerformanceModel):
     """
-    PerformanceModel for attention + routing that returns values based on batch sizes.
-    Based on H100 experiment data using Mixtral-8x7b.
+    PerformanceModel for mixture of experts, based on a CSV database.
     """
-    def __init__(self, batch_times):
+    def __init__(self, db_path):
         super().__init__()
-        self.batch_times = batch_times
+        self.db = pd.read_csv(os.path.join(get_original_cwd(), db_path),
+                              dtype={"model": "category", "hardware": "category"})
+
+        self.db = self.db[["model",
+                           "hardware",
+                           "tensor_parallel",
+                           "prompt_size",
+                           "batch_size",
+                           "attention_time",
+                           "routing_time",
+                           "expert_time"]]
+
+        # convert to seconds
+        self.db["attention_time"] = self.db["attention_time"] / 1000
+        self.db["routing_time"] = self.db["routing_time"] / 1000
+        self.db["expert_time"] = self.db["expert_time"] / 1000
+
+        self.init_predictor()
+
+    def init_predictor(self):
+        """
+        Predict using number of tokens in the batch.
+        """
+        self.attention_time_predictors = {}
+        self.routing_time_predictors = {}
+        self.expert_time_predictors = {}
+        self.attention_time_cache = {}
+        self.routing_time_cache = {}
+        self.expert_time_cache = {}
+
+        for model in self.db["model"].unique():
+            for hardware in self.db["hardware"].unique():
+                for tensor_parallel in self.db["tensor_parallel"].unique():
+                    mask = (self.db["model"] == model) & \
+                            (self.db["hardware"] == hardware) & \
+                            (self.db["tensor_parallel"] == tensor_parallel)
+                    db_subset = self.db[mask].copy()
+                    if len(db_subset) == 0:
+                        continue
+                    db_subset["batch_tokens"] = db_subset["prompt_size"] * db_subset["batch_size"]
+                    x = db_subset[["batch_tokens", "attention_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "attention_time"]].groupby("batch_tokens").median()["attention_time"]
+                    self.attention_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+                    x = db_subset[["batch_tokens", "routing_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "routing_time"]].groupby("batch_tokens").median()["routing_time"]
+                    self.routing_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+                    x = db_subset[["batch_tokens", "expert_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "expert_time"]].groupby("batch_tokens").median()["expert_time"]
+                    self.expert_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+
+    def _match(self, **kwargs):
+        """
+        Returns a boolean mask for the database from kwargs.
+        """
+        mask = True
+        for k, v in kwargs.items():
+            mask &= (self.db[k] == v)
+        return mask
+
+    def predict_new_row(self, **kwargs):
+        """
+        Predicts the prompt and token time for a new row.
+        Inserts the new row into the database.
+        """
+        model = kwargs["model"]
+        hardware = kwargs["hardware"]
+        tensor_parallel = kwargs["tensor_parallel"]
+        batch_tokens = kwargs["batch_tokens"]
+        new_row = pd.DataFrame(kwargs, index=[0])
+
+        attention_time = self.attention_time_predictors[(model, hardware, tensor_parallel)](batch_tokens)
+        routing_time = self.routing_time_predictors[(model, hardware, tensor_parallel)](batch_tokens)
+        expert_time = self.expert_time_predictors[(model, hardware, tensor_parallel)](batch_tokens)
+
+        new_row["attention_time"] = attention_time
+        new_row["routing_time"] = routing_time
+        new_row["expert_time"] = expert_time
+        self.db = pd.concat([self.db, new_row], ignore_index=True)
+        return new_row
+
+    def get_time(self, task_time, **kwargs):
+        """
+        Returns a time value from the database.
+        task_time can be: attention_time, routing_time, expert_time
+        """
+        t_time = self.db[self._match(**kwargs)][task_time].median()
+        # if not found, predict
+        if math.isnan(t_time):
+            new_row = self.predict_new_row(**kwargs)
+            t_time = new_row[task_time][0]
+        return t_time
 
     def get_duration(self, task, batch, instance, *args, **kwargs):
-        if batch not in self.batch_times:
-            raise NotImplementedError
+        model = instance.model.name
+        hardware = instance.processors[0].name
+        tensor_parallel = instance.model.parallelism.tensor_parallelism
+        if task.task_type == TaskType.ATTENTION:
+            prompt_size = task.request.prompt_size
+            token_size = task.request.token_size
+            batch_size = len(batch)
+            attention_time = self.get_time(model=model,
+                                           task_time="attention_time",
+                                           hardware=hardware,
+                                           tensor_parallel=tensor_parallel,
+                                           prompt_size=prompt_size,
+                                           batch_size=batch_size,
+                                           token_size=token_size,
+                                           batch=batch)
+            routing_time = self.get_time(model=model,
+                                         task_time="routing_time",
+                                         hardware=hardware,
+                                         tensor_parallel=tensor_parallel,
+                                         prompt_size=prompt_size,
+                                         batch_size=batch_size,
+                                         token_size=token_size,
+                                         batch=batch)
+            return attention_time + routing_time
+        elif task.task_type == TaskType.EXPERT:
+            prompt_size = task.request.prompt_size
+            token_size = task.request.token_size
+            batch_size = len(batch)
+            expert_time = self.get_time(model=model,
+                                        task_time="expert_time",
+                                        hardware=hardware,
+                                        tensor_parallel=tensor_parallel,
+                                        prompt_size=prompt_size,
+                                        batch_size=batch_size,
+                                        token_size=token_size,
+                                        batch=batch)
+            return expert_time
         else:
-            return self.batch_times[batch]
-        
+            raise NotImplementedError
+
     def get_iteration_duration(self, batch, instance, *args, **kwargs):
         raise NotImplementedError
 
-class ExpertPerformanceModel(PerformanceModel):
-    """
-    PerformanceModel for an expert that returns values based on batch sizes.
-    Based on H100 experiment data using Mixtral-8x7b.
-    """
-    def __init__(self, batch_times):
-        super().__init__()
-        self.batch_times = batch_times
-
-    def get_duration(self, task, batch, instance, *args, **kwargs):
-        if batch not in self.batch_times:
-            raise NotImplementedError
-        else:
-            return self.batch_times[batch]
-        
-    def get_iteration_duration(self, batch, instance, *args, **kwargs):
-        raise NotImplementedError
 
 def get_duration(*args, **kwargs):
     """

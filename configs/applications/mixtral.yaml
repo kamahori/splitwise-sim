@@ -1,0 +1,9 @@
+- application_id: 0
+  model_architecture: mixtral
+  model_size: mixtral-8x7b-attention-fp16 # placeholder
+  allocator: noop
+  scheduler: round_robin
+  overheads: {}
+  debug: ${debug}
+  _target_: application.Application
+  

@@ -1,0 +1,3 @@
+_target_: performance_model.MOEPerformanceModel
+
+db_path: data/mixtral.csv

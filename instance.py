@@ -826,3 +826,8 @@ class SplitwiseInstance(ORCAInstance):
         preempted_tasks = [task for task in old_batch if task not in new_batch]
         new_tasks = [task for task in new_batch if task not in old_batch]
         return preempted_tasks, new_tasks
+
+class MoEInstance(Instance):
+    # operates at layer level, finish n layers before generating output token
+    # thing that runs on servers
+    None

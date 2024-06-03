@@ -261,6 +261,12 @@ class KVScheduler(Scheduler):
                                           bandwidth=bandwidth)
 
 
+# create new scheduler class, like KVScheduler
+# ensure flows are sending right tokens to right attention/expert machines - instance matching
+# divide bandwidth equally between flows ?
+# don't bother with async for this class project
+# flow size is activation size out of attn/expert machine - need to define/assign this correctly
+
 class RandomScheduler(Scheduler):
     """
     RandomScheduler schedules Requests to Instances randomly.

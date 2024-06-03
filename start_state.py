@@ -107,3 +107,11 @@ def splitwise(start_state_cfg, cluster, applications, **kwargs):
                                                          tag="token")
                 else:
                     raise ValueError(f"Unsupported sku_name: {sku_name}")
+
+
+def moe(start_state_cfg, cluster, applications, **kwargs):
+    None
+    # application: logical entity, many instances
+    # instance: one model-serving unit
+    # one application, n instances for attn and m for experts
+    # check that model arch is mixtral
