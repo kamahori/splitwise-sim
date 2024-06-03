@@ -256,6 +256,42 @@ class DatabasePerformanceModel(PerformanceModel):
         return iteration_time
 
 
+class AttentionPerformanceModel(PerformanceModel):
+    """
+    PerformanceModel for attention + routing that returns values based on batch sizes.
+    Based on H100 experiment data using Mixtral-8x7b.
+    """
+    def __init__(self, batch_times):
+        super().__init__()
+        self.batch_times = batch_times
+
+    def get_duration(self, task, batch, instance, *args, **kwargs):
+        if batch not in self.batch_times:
+            raise NotImplementedError
+        else:
+            return self.batch_times[batch]
+        
+    def get_iteration_duration(self, batch, instance, *args, **kwargs):
+        raise NotImplementedError
+
+class ExpertPerformanceModel(PerformanceModel):
+    """
+    PerformanceModel for an expert that returns values based on batch sizes.
+    Based on H100 experiment data using Mixtral-8x7b.
+    """
+    def __init__(self, batch_times):
+        super().__init__()
+        self.batch_times = batch_times
+
+    def get_duration(self, task, batch, instance, *args, **kwargs):
+        if batch not in self.batch_times:
+            raise NotImplementedError
+        else:
+            return self.batch_times[batch]
+        
+    def get_iteration_duration(self, batch, instance, *args, **kwargs):
+        raise NotImplementedError
+
 def get_duration(*args, **kwargs):
     """
     Returns the execution time of the task.
