@@ -14,6 +14,16 @@ class LLMArchitecture(ModelArchitecture):
     hidden_size: int
     num_heads: int
 
+@dataclass(kw_only=True)
+class AttentionArchitecture(ModelArchitecture):
+    hidden_size: int
+    experts_per_token: int
+
+@dataclass(kw_only=True)
+class ExpertArchitecture(ModelArchitecture):
+    hidden_size: int
+    num_experts: int
+    experts_per_token: int
 
 @dataclass(kw_only=True)
 class ModelParallelism():

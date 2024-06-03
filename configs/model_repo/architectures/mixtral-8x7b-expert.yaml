@@ -1,0 +1,5 @@
+_target_: model.ExpertArchitecture
+name: mixtral-8x7b-expert
+num_layers: 32
+hidden_size: 1
+experts_per_token: int
