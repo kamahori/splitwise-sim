@@ -13,7 +13,8 @@ class TaskType(IntEnum):
     PROMPT = 1
     TOKEN = 2,
     ATTENTION = 3,
-    EXPERT = 4
+    EXPERT = 4,
+    MOE = 5
 
 
 @dataclass(kw_only=True)
@@ -352,6 +353,51 @@ class ExpertTask(Task):
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0
+
+
+@dataclass(kw_only=True)
+class MoETask(Task):
+    # Do we need this for non-disaggregated?
+    task_type = TaskType.MOE
+    attention_task: AttentionTask = None
+    expert_task: ExpertTask = None
+
+    # Need to set these and update these somewhere
+    prompt_size: int = 0 
+    token_size: int = 0
+    tokens_per_iteration: int = 0
+    processing_tokens: int = 0
+    processed_tokens: int = 0
+    generating_tokens: int = 0
+    generated_tokens: int = 0
+
+    def __hash__(self):
+        return hash(self.node_id)
+
+    @property
+    def memory(self):
+        return self.attention_task.memory + self.expert_task.memory
+
+    def max_memory(self, instance):
+        return self.attention_task.max_memory() + self.expert_task.max_memory()
+
+    def run(self):
+        super().run()
+        self.attention_task.run()
+        self.expert_task.run()
+
+    def complete_iteration(self):
+        # tokens processing
+        self.attention_task.complete_iteration()
+        self.expert_task.complete_iteration()
+
+    def is_complete(self):
+        return self.attention_task.is_complete() and self.expert_task.is_complete()
+
+    def complete(self):
+        super().complete()
+        self.attention_task.complete()
+        self.expert_task.complete()
 
 
 if __name__ == "__main__":

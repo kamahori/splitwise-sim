@@ -11,7 +11,7 @@ from metrics import InstanceMetrics
 from node import NodeState
 from performance_model import get_duration, get_iteration_duration
 from simulator import clock, schedule_event, cancel_event, reschedule_event
-from task import PromptTask, TokenTask
+from task import PromptTask, TokenTask, AttentionTask, ExpertTask, MoETask
 
 
 class Instance():
@@ -189,6 +189,8 @@ class Instance():
             return AttentionInstance()
         elif instance_type == "Expert":
             return ExpertInstance()
+        elif instance_type == "MoE":
+            return MoEInstance()
         else:
             raise ValueError(f"Instance type {instance_type} not supported")
 
@@ -830,12 +832,20 @@ class SplitwiseInstance(ORCAInstance):
         preempted_tasks = [task for task in old_batch if task not in new_batch]
         new_tasks = [task for task in new_batch if task not in old_batch]
         return preempted_tasks, new_tasks
+        
 
-
-class AttentionInstance(ORCAInstance):
-    # operates at layer level, finish n layers before generating output token
-    # thing that runs on servers
-    # only increase generated token count when all n layers are done
+class MoEInstance(Instance):
+    # TODO: FOR NON-DISAGGREGATED, AN ITERATION GENERATES A TOKEN
+    # TODO: FOR DISAGGREGATED, YOU NEED N_LAYERS ITERATIONS TO GENERATE A TOKEN
+    # TODO: maybe just don't do iterations for disaggregated, since it depends on task layer and is always 1?
+    """
+    Iteration-level FCFS scheduling and selective batching.
+    Simulated using contiguous iterations rather than per iteration.
+    Multiple tasks from the same request cannot execute concurrently. 
+    Does not support preemption.
+    Only compatible with get_iteration_duration from performance_model.
+    Debug not supported at the moment.
+    """
     def __init__(self,
                  instance_id,
                  application,
@@ -854,31 +864,218 @@ class AttentionInstance(ORCAInstance):
                          model,
                          processors,
                          overheads,
-                         max_batch_size,
                          debug)
         self.max_batch_tokens = max_batch_tokens
+        self.max_batch_size = max_batch_size
 
+        # In non-disaggregated setting, there are only MoE tasks.
+        self.moe_tasks_in_batch = []
+        # In disaggregated setting, only one of these will have items.
+        self.attention_tasks_in_batch = []
+        self.expert_tasks_in_batch = []
 
-class ExpertInstance(ORCAInstance):
-    # each request has an attention task and expert task, only expert should increase generated token
-    def __init__(self,
-                 instance_id,
-                 application,
-                 name,
-                 tag,
-                 model,
-                 processors,
-                 overheads,
-                 max_batch_size,
-                 max_batch_tokens,
-                 debug=False):
-        super().__init__(instance_id,
-                         application,
-                         name,
-                         tag,
-                         model,
-                         processors,
-                         overheads,
-                         max_batch_size,
-                         debug)
-        self.max_batch_tokens = max_batch_tokens
+        self.pending_tokens = 0
+        self.batch_tokens = 0
+        self.pending_requests = []
+        self.request_tasks = {}
+
+        self.iteration_duration = 0.
+        self.num_contiguous_iterations = 0
+        self.pause_next_iteration = False
+
+    def add_pending_task(self, task):
+        self.pending_queue.append(task)
+        if isinstance(task, ExpertTask) or isinstance(task, MoETask):
+            self.pending_tokens += 1
+
+    def remove_pending_task(self, task):
+        self.pending_queue.remove(task)
+        if task in self.blocked_queue:
+            self.blocked_queue.remove(task)
+        if isinstance(task, ExpertTask) or isinstance(task, MoETask):
+            self.pending_tokens -= 1
+
+    def add_to_pool(self, task):
+        if task.request not in self.pending_requests:
+            bisect.insort(self.pending_requests, task.request,
+                          key=lambda x: x.arrival_timestamp)
+            self.request_tasks[task.request] = [task]
+        else:
+            self.request_tasks[task.request].append(task)
+
+    def remove_from_pool(self, task):
+        self.request_tasks[task.request].remove(task)
+        if len(self.request_tasks[task.request]) == 0:
+            self.pending_requests.remove(task.request)
+            del self.request_tasks[task.request]
+
+    def task_arrival(self, task):
+        task.instance = self
+        task.arrive()
+
+        self.add_to_pool(task)
+        self.add_pending_task(task)
+
+        if len(self.batch) == 0:
+            if self.memory + task.memory > self.max_memory:
+                return
+            self.start_iteration()
+            return
+        
+        if len(self.batch) < self.max_batch_size and self.batch_tokens <= self.max_batch_tokens:
+            self.pause_iteration()
+            return
+        
+    def add_to_batch(self, task):
+        self.batch.append(task)
+
+        if isinstance(task, AttentionTask):
+            self.attention_tasks_in_batch.append(task)
+        elif isinstance(task, ExpertTask):
+            self.expert_tasks_in_batch.append(task)
+        elif isinstance(task, MoETask):
+            self.moe_tasks_in_batch.append(task)
+        
+        if len(self.batch) == 1:
+            self.metrics.run_timestamp = clock()
+
+    def remove_from_batch(self, task):
+        self.batch.remove(task)
+
+        if isinstance(task, AttentionTask):
+            self.attention_tasks_in_batch.remove(task)
+        elif isinstance(task, ExpertTask):
+            self.expert_tasks_in_batch.remove(task)
+        elif isinstance(task, MoETask):
+            self.moe_tasks_in_batch.remove(task)
+
+        if len(self.batch) == 0:
+            self.metrics.busy_time += clock() - self.metrics.run_timestamp
+            self.metrics.run_timestamp = 0.
+
+    def get_num_contiguous_iterations(self):
+        if len(self.batch) == 0:
+            return 0
+        
+        if len(self.moe_tasks_in_batch) == 0:
+            return 1
+        
+        # only > 1 when doing non-disaggregated
+        return min(task.token_size - task.generated_tokens for task in self.batch)
+    
+    def select_batch(self):
+        old_batch = self.batch
+        new_batch = []
+        new_tasks = []
+
+        for task in old_batch:
+            new_batch.append(task)
+        
+        memory = self.memory
+        for request in self.pending_requests:
+            if len(new_batch) == self.max_batch_size:
+                break
+            task = self.request_tasks[request][0] # double check this
+            if task in old_batch:
+                continue
+            if task.state == NodeState.BLOCKED:
+                new_batch.append(task)
+                new_tasks.append(task)
+                continue
+            if task.memory + memory <= self.max_memory:
+                new_batch.append(task)
+                new_tasks.append(task)
+                memory += task.memory
+            else:
+                break
+
+        return new_tasks
+    
+    def start_iteration(self):
+        new_tasks = self.select_batch()
+
+        for task in new_tasks:
+            self.remove_pending_task(task)
+            self.add_to_batch(task)
+
+        if len(self.batch) == 0:
+            if len(self.pending_requests) > 0:
+                self.application.scheduler.notify_busy_instance(self)
+            else:
+                self.application.scheduler.notify_free_instance(self)
+            return
+
+        self.iteration_duration = get_iteration_duration(batch=self.batch, instance=self)
+        self.num_contiguous_iterations = self.get_num_contiguous_iterations()
+        for task in self.batch:
+            task.generating_tokens = self.num_contiguous_iterations
+            task.processing_tokens = task.tokens_per_iteration
+            if task.state == NodeState.QUEUED:
+                task.run()
+            elif task.state == NodeState.BLOCKED:
+                None # TODO: what to do here? is this even a valid case without preempt?
+            elif task.state == NodeState.RUNNING:
+                pass
+
+        self.completion_events["iteration"] = schedule_event(
+            self.iteration_duration * self.num_contiguous_iterations,
+            lambda instance=self: instance.complete_iteration())
+
+    def pause_iteration(self):
+        # do we need other conditions here?
+        # think this should only be called for non-disaggregated?
+        if self.pause_next_iteration or len(self.moe_tasks_in_batch) == 0:
+            return
+        self.pause_next_iteration = True
+
+        contiguous_iteration_duration_old = self.iteration_duration * self.num_contiguous_iterations
+        iteration_start = self.completion_events["iteration"].time - \
+                            contiguous_iteration_duration_old
+        elapsed_time = clock() - iteration_start
+        num_completed_iterations = (clock() - iteration_start) // self.iteration_duration
+        self.num_contiguous_iterations = num_completed_iterations + 1
+
+        for task in self.batch:
+            # double check this?
+            task.generating_tokens = self.num_contiguous_iterations
+            task.processing_tokens = self.tokens_per_iteration
+
+        contiguous_iteration_duration_new = self.iteration_duration * self.num_contiguous_iterations
+        remaining_time = contiguous_iteration_duration_new - elapsed_time
+
+        self.completion_events["iteration"] = reschedule_event(
+                            self.completion_events["iteration"], remaining_time)
+
+    def complete_iteration(self):
+        # TODO: REMEMBER THAT IN DISAGGREGATE, TOKEN IS ONLY GENERATED AFTER N_LAYER ITERATIONS
+        completed_tasks = []
+        for task in self.batch:
+            task.complete_iteration()
+            if task.is_complete():
+                completed_tasks.append(task)
+        for task in completed_tasks:
+            self.task_completion(task)
+        self.pause_next_iteration = False
+        self.start_iteration()
+
+    def task_completion(self, task):
+        # TODO: RETHINK COMPLETION TIMING / WHAT COMPLETION MEANS
+        task.complete()
+        self.remove_from_batch(task)
+        self.remove_from_pool(task)
+        self.completed_queue.append(task)
+        task.executor.finish_task(task, self)
+
+    def notify_flow_completion(self, flow):
+        if len(self.pending_queue) == 0:
+            return
+        task = self.pending_queue[0]
+        if len(self.batch) == 0:
+            if self.memory + task.memory > self.max_memory:
+                return
+            self.start_iteration()
+            return
+        # TODO: double check pause logic
+        if len(self.batch) < self.max_batch_size and self.batch_tokens < self.max_batch_tokens:
+            self.pause_iteration()
+            return
