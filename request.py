@@ -344,8 +344,8 @@ class GenerativeMoERequest(Request):
         expert_task = self.create_task(task_type=TaskType.EXPERT,
                                       token_size=self.token_size - 1)
         # update DAG
-        self.dag.add_edge(prompt_task, token_task)
-        self.root_node = prompt_task
+        self.dag.add_edge(attention_task, expert_task)
+        self.root_node = attention_task
 
     def __hash__(self):
         return hash(self.request_id)
