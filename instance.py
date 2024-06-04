@@ -832,7 +832,7 @@ class SplitwiseInstance(ORCAInstance):
         return preempted_tasks, new_tasks
 
 
-class AttentionInstance(Instance):
+class AttentionInstance(ORCAInstance):
     # operates at layer level, finish n layers before generating output token
     # thing that runs on servers
     # only increase generated token count when all n layers are done
@@ -844,7 +844,8 @@ class AttentionInstance(Instance):
                  model,
                  processors,
                  overheads,
-                 num_layers,
+                 max_batch_size,
+                 max_batch_tokens,
                  debug=False):
         super().__init__(instance_id,
                          application,
@@ -853,11 +854,12 @@ class AttentionInstance(Instance):
                          model,
                          processors,
                          overheads,
+                         max_batch_size,
                          debug)
-        self.num_layers = num_layers
+        self.max_batch_tokens = max_batch_tokens
 
 
-class ExpertInstance(Instance):
+class ExpertInstance(ORCAInstance):
     # each request has an attention task and expert task, only expert should increase generated token
     def __init__(self,
                  instance_id,
@@ -867,7 +869,8 @@ class ExpertInstance(Instance):
                  model,
                  processors,
                  overheads,
-                 num_layers,
+                 max_batch_size,
+                 max_batch_tokens,
                  debug=False):
         super().__init__(instance_id,
                          application,
@@ -876,5 +879,6 @@ class ExpertInstance(Instance):
                          model,
                          processors,
                          overheads,
+                         max_batch_size,
                          debug)
-        self.num_layers = num_layers
+        self.max_batch_tokens = max_batch_tokens
