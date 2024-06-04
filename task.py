@@ -229,7 +229,7 @@ class AttentionTask(Task):
     """
     Attention tasks represent the attention phase in a mixture of experts model.
     """
-    layer: int
+    layer_id: int
     token_size: int
     tokens_per_iteration: int = 1
     processing_tokens: int = 0
@@ -295,14 +295,15 @@ class ExpertTask(Task):
     """
     Expert tasks represent the sparse expert phase in a mixture of experts model.
     """
-    layer: int
+    layer_id: int
     token_size: int
     tokens_per_iteration: int = 1
     processing_tokens: int = 0
     processed_tokens: int = 0
     generating_tokens: int = 0
     generated_tokens: int = 0
-    task_type: TaskType = TaskType.ATTENTION
+    expert_id: int = 0
+    task_type: TaskType = TaskType.EXPERT
 
     def __hash__(self):
         return hash(self.node_id)

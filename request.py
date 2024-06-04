@@ -1,4 +1,5 @@
 import logging
+import random
 
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -329,6 +330,7 @@ class GenerativeMoERequest(Request):
     token_size: int = 0
     kv_cache_size: int = 0
     n_layers: int = 0 # TODO (keisuke): Number of layers in the MoE model
+    n_experts: int = 8 # Number of experts in the MoE model
     flow_node: Flow = None
     cost: float = 0.
     memory: float = 0.
@@ -339,13 +341,58 @@ class GenerativeMoERequest(Request):
         self.max_seq_len = self.prompt_size + self.token_size
         # create prompt and token tasks
         # TODO (keisuke): determine number of tokens for each based on expert popularity info
-        attention_task = self.create_task(task_type=TaskType.ATTENTION,
-                                       prompt_size=self.prompt_size)
-        expert_task = self.create_task(task_type=TaskType.EXPERT,
-                                      token_size=self.token_size - 1)
-        # update DAG
-        self.dag.add_edge(attention_task, expert_task)
-        self.root_node = attention_task
+        # attention_task = self.create_task(task_type=TaskType.ATTENTION,
+        #                                prompt_size=self.prompt_size)
+        # expert_task = self.create_task(task_type=TaskType.EXPERT,
+        #                               token_size=self.token_size - 1)
+        # # update DAG
+        # self.dag.add_edge(attention_task, expert_task)
+        # self.root_node = attention_task
+        
+        # we will generate the DAG involving all attention and expert layers for both prompt and token phases
+        # first do prompt phase
+        expert_tasks = []
+        # TODO: double check the size argument to task
+        for i in range(self.n_layers):
+            attention_task = self.create_task(task_type=TaskType.ATTENTION,
+                                           prompt_size=self.prompt_size,
+                                           layer_id=i)
+            if i == 0:
+                self.root_node = attention_task
+            # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
+            for j in range(self.n_experts):
+                expert_task = self.create_task(task_type=TaskType.EXPERT,
+                                              prompt_size=self.prompt_size // 8,
+                                              layer_id=i,
+                                              expert_id=j)
+                self.dag.add_edge(attention_task, expert_task)
+                expert_tasks.append(expert_task)
+        # then do token phase
+        for token_id in range(self.token_size):
+            for layer_id in range(self.n_layers):
+                attention_task = self.create_task(task_type=TaskType.ATTENTION,
+                                               token_size=1,
+                                               layer_id=layer_id)
+                if len(expert_tasks) != 0:
+                    for expert_task in expert_tasks:
+                        self.dag.add_edge(expert_task, attention_task)
+                
+                # draw two random numbers for expert ids
+                expert_id_1 = random.randint(0, 7)
+                expert_id_2 = random.randint(0, 7)
+                expert_task_1 = self.create_task(task_type=TaskType.EXPERT,
+                                                token_size=1,
+                                                layer_id=layer_id,
+                                                expert_id=expert_id_1)
+                expert_task_2 = self.create_task(task_type=TaskType.EXPERT,
+                                                token_size=1,
+                                                layer_id=layer_id,
+                                                expert_id=expert_id_2)
+                self.dag.add_edge(attention_task, expert_task_1)
+                self.dag.add_edge(attention_task, expert_task_2)
+                expert_tasks = [expert_task_1, expert_task_2]
+                
+            
 
     def __hash__(self):
         return hash(self.request_id)
