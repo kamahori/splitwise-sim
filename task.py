@@ -229,9 +229,8 @@ class AttentionTask(Task):
     """
     Attention tasks represent the attention phase in a mixture of experts model.
     """
-    layer: int
-    token_size: int
-    tokens_per_iteration: int = 1
+    current_layer: int = 0
+    tokens_per_iteration: int = 0
     processing_tokens: int = 0
     processed_tokens: int = 0
     generating_tokens: int = 0
@@ -295,9 +294,8 @@ class ExpertTask(Task):
     """
     Expert tasks represent the sparse expert phase in a mixture of experts model.
     """
-    layer: int
-    token_size: int
-    tokens_per_iteration: int = 1
+    current_layer: int = 0
+    tokens_per_iteration: int = 0
     processing_tokens: int = 0
     processed_tokens: int = 0
     generating_tokens: int = 0

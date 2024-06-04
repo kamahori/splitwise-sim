@@ -8,7 +8,7 @@ import pandas as pd
 from hydra.utils import get_original_cwd
 from scipy.interpolate import interp1d
 
-from task import TaskType, PromptTask, TokenTask
+from task import TaskType, PromptTask, TokenTask, AttentionTask, ExpertTask
 
 
 performance_model = None
@@ -269,6 +269,7 @@ class MOEPerformanceModel(PerformanceModel):
                            "hardware",
                            "tensor_parallel",
                            "prompt_size",
+                           "token_size",
                            "batch_size",
                            "attention_time",
                            "routing_time",
@@ -381,7 +382,7 @@ class MOEPerformanceModel(PerformanceModel):
                                          batch_size=batch_size,
                                          token_size=token_size,
                                          batch=batch)
-            return attention_time + routing_time
+            return (attention_time + routing_time) * instance.model.num_layers
         elif task.task_type == TaskType.EXPERT:
             prompt_size = task.request.prompt_size
             token_size = task.request.token_size
@@ -394,12 +395,72 @@ class MOEPerformanceModel(PerformanceModel):
                                         batch_size=batch_size,
                                         token_size=token_size,
                                         batch=batch)
-            return expert_time
+            return expert_time * instance.model.num_layers
         else:
             raise NotImplementedError
 
     def get_iteration_duration(self, batch, instance, *args, **kwargs):
-        raise NotImplementedError
+        """
+        First iteration for a task includes prompt/context, so it has prompt_size tokens.
+        Subsequent iterations for a task have 1 token per expert (previous output).
+        In the disaggregated setting, return duration for a single layer (attention, gating, expert(s)).
+        In the non-disaggregated setting, return duration for all layers?
+        TODO: double check the layer stuff and if each layer is full decoder, or if layers mean ffn layers
+        """
+        model = instance.model.name
+        top_k_experts = instance.model.top_k_experts
+        hardware = instance.processors[0].name
+        pipeline_parallel = instance.model.parallelism.pipeline_parallelism
+        tensor_parallel = instance.model.parallelism.tensor_parallelism
+
+        attention_tasks = []
+        expert_tasks = []
+        batch_tokens = 0
+        for task in batch:
+            if isinstance(task, AttentionTask):
+                attention_tasks.append(task)
+                batch_tokens += task.request.prompt_size if task.request.generated_tokens == 0 else top_k_experts
+            elif isinstance(task, ExpertTask):
+                expert_tasks.append(task)
+                batch_tokens += task.request.tokens_per_iteration if task.request.generated_tokens == 0 else top_k_experts
+            else:
+                raise NotImplementedError
+        
+        iteration_time = None
+        cache_key = (model, hardware, tensor_parallel, batch_tokens)
+        predictors_key = (model, hardware, tensor_parallel)
+
+        if len(attention_tasks) == len(batch):
+            iteration_time = self.attention_time_cache.get(cache_key)
+            if iteration_time is None:
+                iteration_time = float(self.attention_time_predictors[predictors_key](batch_tokens))
+                self.attention_time_cache[cache_key] = iteration_time
+        elif len(expert_tasks) == len(batch):
+            iteration_time = self.expert_time_cache.get(cache_key)
+            if iteration_time is None:
+                iteration_time = float(self.expert_time_predictors[predictors_key](batch_tokens))
+                self.expert_time_cache[cache_key] = iteration_time
+        else:
+            # This is for non-disaggregated
+            if len(attention_tasks) != len(expert_tasks):
+                raise ValueError
+            batch_tokens = batch_tokens / 2
+            cache_key = (model, hardware, tensor_parallel, batch_tokens)
+
+            _iteration_time = self.attention_time_cache.get(cache_key)
+            if _iteration_time is None:
+                _iteration_time = float(self.attention_time_predictors[predictors_key](batch_tokens))
+                self.attention_time_cache[cache_key] = _iteration_time
+            iteration_time = _iteration_time
+            _iteration_time = self.expert_time_cache.get(cache_key)
+            if _iteration_time is None:
+                _iteration_time = float(self.expert_time_predictors[predictors_key](batch_tokens))
+                self.expert_time_cache[cache_key] = _iteration_time
+            iteration_time += _iteration_time
+            iteration_time = iteration_time * instance.model.num_layers
+
+        assert iteration_time > 0
+        return iteration_time
 
 
 def get_duration(*args, **kwargs):

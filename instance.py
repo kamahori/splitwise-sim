@@ -835,6 +835,7 @@ class SplitwiseInstance(ORCAInstance):
 class AttentionInstance(Instance):
     # operates at layer level, finish n layers before generating output token
     # thing that runs on servers
+    # only increase generated token count when all n layers are done
     def __init__(self,
                  instance_id,
                  application,
