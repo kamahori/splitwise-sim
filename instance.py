@@ -858,6 +858,7 @@ class AttentionInstance(Instance):
 
 
 class ExpertInstance(Instance):
+    # each request has an attention task and expert task, only expert should increase generated token
     def __init__(self,
                  instance_id,
                  application,

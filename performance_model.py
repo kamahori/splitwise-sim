@@ -435,6 +435,8 @@ class MOEPerformanceModel(PerformanceModel):
             if iteration_time is None:
                 iteration_time = float(self.attention_time_predictors[predictors_key](batch_tokens))
                 self.attention_time_cache[cache_key] = iteration_time
+                self.routing_time_cache[cache_key] = float(self.routing_time_predictors[predictors_key](batch_tokens))
+            iteration_time += self.routing_time_cache.get(cache_key)
         elif len(expert_tasks) == len(batch):
             iteration_time = self.expert_time_cache.get(cache_key)
             if iteration_time is None:
@@ -451,7 +453,10 @@ class MOEPerformanceModel(PerformanceModel):
             if _iteration_time is None:
                 _iteration_time = float(self.attention_time_predictors[predictors_key](batch_tokens))
                 self.attention_time_cache[cache_key] = _iteration_time
+                self.routing_time_cache[cache_key] = float(self.routing_time_predictors[predictors_key](batch_tokens))
             iteration_time = _iteration_time
+            iteration_time += self.routing_time_cache.get(cache_key)
+
             _iteration_time = self.expert_time_cache.get(cache_key)
             if _iteration_time is None:
                 _iteration_time = float(self.expert_time_predictors[predictors_key](batch_tokens))
