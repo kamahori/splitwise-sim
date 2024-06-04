@@ -185,10 +185,6 @@ class Instance():
                                      max_batch_tokens=max_batch_tokens,
                                      max_preemptions=max_preemptions,
                                      **kwargs)
-        elif instance_type == "Attention":
-            return AttentionInstance()
-        elif instance_type == "Expert":
-            return ExpertInstance()
         elif instance_type == "MoE":
             return MoEInstance()
         else:
