@@ -311,6 +311,102 @@ class GenerativeLLMRequest(Request):
         """
         return self.nodes[1].metrics.start_timestamp - self.nodes[0].metrics.completion_timestamp
 
+@dataclass(kw_only=True)
+class GenerativeMoERequest(Request):
+    """
+    GenerativeMoERequest are requests that generate tokens from a prompt.
+    Attention and expert layers are disaggregated.
+    Activation shipping is represented using Flows.
+    NOTE: Assumes that KV-cache is uniformly split across all GPUs.
+    NOTE: Multi-prompt chat conversations are not supported here.
+    """
+    max_seq_len: int = 0
+    processed_tokens: int
+    _processed_tokens: int = 0
+    generated_tokens: int
+    _generated_tokens: int = 0
+    prompt_size: int = 0
+    token_size: int = 0
+    kv_cache_size: int = 0
+    n_layers: int = 0 # TODO (keisuke): Number of layers in the MoE model
+    flow_node: Flow = None
+    cost: float = 0.
+    memory: float = 0.
+    metrics: GenerativeLLMRequestMetrics = field(
+        default_factory=GenerativeLLMRequestMetrics)
+
+    def __post_init__(self):
+        self.max_seq_len = self.prompt_size + self.token_size
+        # create prompt and token tasks
+        # TODO (keisuke): determine number of tokens for each based on expert popularity info
+        attention_task = self.create_task(task_type=TaskType.ATTENTION,
+                                       prompt_size=self.prompt_size)
+        expert_task = self.create_task(task_type=TaskType.EXPERT,
+                                      token_size=self.token_size - 1)
+        # update DAG
+        self.dag.add_edge(prompt_task, token_task)
+        self.root_node = prompt_task
+
+    def __hash__(self):
+        return hash(self.request_id)
+
+    @property
+    def processed_tokens(self):
+        """
+        Returns the number of prompt tokens processed so far.
+        """
+        return self._processed_tokens
+
+    @processed_tokens.setter
+    def processed_tokens(self, processed_tokens):
+        """
+        Sets the number of prompt tokens processed so far.
+        """
+        if isinstance(processed_tokens, property):
+            processed_tokens = 0
+        if processed_tokens > self.prompt_size + self.token_size:
+            print(processed_tokens, self.prompt_size + self.token_size)
+            raise ValueError("Processed tokens limit exceeded")
+        self._processed_tokens = processed_tokens
+
+    @property
+    def generated_tokens(self):
+        """
+        Returns the number of tokens generated so far.
+        """
+        return self._generated_tokens
+
+    @generated_tokens.setter
+    def generated_tokens(self, generated_tokens):
+        """
+        Sets the number of tokens generated so far.
+        """
+        if isinstance(generated_tokens, property):
+            generated_tokens = 0
+        if generated_tokens > self.max_seq_len:
+            raise ValueError("Maximum sequence length exceeded")
+        self._generated_tokens = generated_tokens
+
+
+    def estimate_kv_cache_size(self, num_tokens=None, model=None):
+        """
+        Returns the KV-cache size after generating num_tokens
+        Requires the Request root node to be allocated on an Instance.
+        """
+        if num_tokens is None:
+            num_tokens = self.generated_tokens
+        if model is None:
+            model = self.root_node.instance.model
+        return 2 * self.batch_size * num_tokens * model.architecture.hidden_size \
+                * model.architecture.num_layers * model.size.dtype_size
+
+    def get_nth_token_overhead(self):
+        """
+        Returns the overhead of generating the nth token.
+        """
+        return self.nodes[1].metrics.start_timestamp - self.nodes[0].metrics.completion_timestamp
+
+
 
 if __name__ == "__main__":
     pass
