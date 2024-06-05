@@ -289,47 +289,50 @@ class MoEScheduler(Scheduler):
         self.attn_processors = attn_processors
         self.expert_processors = expert_processors 
         self.attn_instances = []
-        self.expert_instances = []
+        # global expert id -> list of expert instance
+        self.expert_instances = {}
         # TODO (keisuke): distinguish between different experts
 
-    def add_instance(self, instance):
+    def add_attn_instance(self, instance):
         """
-        Tracks prompt and token instances differently.
+        Add attention instance
         NOTE: assumes instance tags are distinguishers, not h/w itself
         TODO: make this more flexible and robust
         """
         self.instances.append(instance)
-        if instance.tag == "attn":
-            self.attn_instances.append(instance)
-        elif instance.tag == "expert":
-            self.expert_instances.append(instance)
-        else:
-            # alternative way to distinguish instances
-            if isinstance(self.attn_processors, list):
-                if instance.name in self.attn_processors:
-                    self.attn_instances.append(instance)
-                elif instance.name in self.expert_processors:
-                    self.expert_instances.append(instance)
-                else:
-                    raise ValueError(f"Unsupported instance type: \
-                                        {instance.processors[0].name}")
+        self.attn_instances.append(instance)
+        # if instance.tag == "attn":
+        # elif instance.tag == "expert":
+        #     self.expert_instances.append(instance)
+        # else:
+        #     # alternative way to distinguish instances
+        #     if isinstance(self.attn_processors, list):
+        #         if instance.name in self.attn_processors:
+        #             self.attn_instances.append(instance)
+        #         elif instance.name in self.expert_processors:
+        #             self.expert_instances.append(instance)
+        #         else:
+        #             raise ValueError(f"Unsupported instance type: \
+        #                                 {instance.processors[0].name}")
+    def add_expert_instance(self, instance, expert_id):
+        """
+        Add expert instance
+        """
+        self.instances.append(instance)
+        if expert_id not in self.expert_instances:
+            self.expert_instances[expert_id] = []
+        self.expert_instances[expert_id].append(instance)
 
     def assert_request_type(self, request):
         assert isinstance(request, GenerativeMoERequest)
     
-    def add_act_transfer(self, request, src_instance, dest_instance, bandwidth):
+    def add_act_transfer(self, request, attn_task, expert_task, src_instance, dest_instance, bandwidth, flow_size):
         """
-        Convert attention->expert request to 
-        attention->act_transfer->expert->act_transfer request
-        by adding a flow node to the request graph.
+        Add activation transfer between attention and expert tasks
+        Attn task assigned to src_instance, expert task assigned to dest_instance
         """
-        attn_task = request.root_node
-        expert_task = next(request.successors(attn_task))
 
-        # create new tasks and flows
-        flow_size = request.estimate_kv_cache_size(
-                                        num_tokens=attn_task.prompt_size,
-                                        model=src_instance.model)
+
         # TODO (keisuke): determine network latency from profiling, 
         # consider multiple layers, consider different experts
         act_transfer_flow_0 = request.create_flow(FlowType.KVCacheTransfer,
@@ -338,26 +341,17 @@ class MoEScheduler(Scheduler):
                                                dest=dest_instance)
         act_transfer_flow_0.notify = True
 
-        act_transfer_flow_1 = request.create_flow(FlowType.KVCacheTransfer,
-                                               size=flow_size,
-                                               src=src_instance,
-                                               dest=dest_instance)
-        act_transfer_flow_1.notify = True
-
         # update request DAG
         request.flow_node_0 = act_transfer_flow_0
-        request.flow_node_1 = act_transfer_flow_1
         request.dag.remove_edge(attn_task, expert_task)
         request.dag.add_edge(attn_task, act_transfer_flow_0)
-        request.dag.add_edge(act_transfer_flow_1, expert_task)
+        request.dag.add_edge(act_transfer_flow_0, expert_task)
 
         # assign tasks and flows to instances and links
         attn_task.instance = src_instance
         expert_task.instance = dest_instance
         # NOTE: simulate delay by adding a link of configurable bandwidth
         act_transfer_flow_0.link = DummyLink(name="DummyLink",
-                                          bandwidth=bandwidth)
-        act_transfer_flow_1.link = DummyLink(name="DummyLink",
                                           bandwidth=bandwidth)
 
 
@@ -833,3 +827,24 @@ class MixedPoolScheduler(KVScheduler):
         # bookkeeping
         prompt_instance.sched_pending_tokens += prompt_task.prompt_size
         token_instance.sched_pending_tokens += 1
+
+
+class RandomMoEScheduler(MoEScheduler):
+    """
+    RandomMoEScheduler randomly assigns attention task to attention instance and expert task to any expert instance that holds the expert weight
+    """
+    def __init__(self,
+                 application,
+                 router,
+                 overheads,
+                 executor_overheads,
+                 attn_processors,
+                 expert_processors,
+                 debug=False):
+        super.__init__(application,
+                       router,
+                       overheads,
+                       executor_overheads,
+                       attn_processors,
+                       expert_processors,
+                       debug)
