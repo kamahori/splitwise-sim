@@ -185,6 +185,8 @@ def generate_traces(max_requests,
 def generate_moe_trace(max_requests, distributions, expert_popularity_filename, end_time=None):
     """
     Generate a trace of requests based on the given distributions.
+
+    TODO (keisuke): this is generating expert selection per request, not per token.
     """
     # Generate request IDs
     request_ids = np.arange(max_requests)
@@ -276,7 +278,7 @@ def generate_trace_from_prompt_token_size_distributions_and_expert_popularity(
     )
     trace_df = generate_moe_trace(max_requests,
                               distributions,
-                              expert_popularity_filename
+                              expert_popularity_filename,
                               end_time=end_time)
     return trace_df
 
