@@ -13,7 +13,8 @@ class TaskType(IntEnum):
     PROMPT = 1
     TOKEN = 2,
     ATTENTION = 3,
-    EXPERT = 4
+    EXPERT = 4,
+    MOE = 5
 
 
 @dataclass(kw_only=True)
@@ -227,16 +228,13 @@ class TokenTask(Task):
 @dataclass(kw_only=True)
 class AttentionTask(Task):
     """
-    Attention tasks represent the attention phase in a mixture of experts model.
+    Attention task represents the attention phase in a mixture of experts model layer.
     """
     layer_id: int
     token_size: int
     tokens_per_iteration: int = 1
     current_layer: int = 0
-    processing_tokens: int = 0
-    processed_tokens: int = 0
-    generating_tokens: int = 0
-    generated_tokens: int = 0
+    num_tokens: int = 0
     task_type: TaskType = TaskType.ATTENTION
 
     def __hash__(self):
@@ -244,48 +242,21 @@ class AttentionTask(Task):
 
     @property
     def memory(self):
-        num_tokens = self.token_size
-        return self.request.estimate_kv_cache_size(num_tokens=num_tokens,
+        return self.request.estimate_kv_cache_size(num_tokens=self.num_tokens,
                                                    model=self.instance.model)
 
     def max_memory(self, instance):
-        num_tokens = self.token_size
-        return self.request.estimate_kv_cache_size(num_tokens=num_tokens,
+        return self.request.estimate_kv_cache_size(num_tokens=self.num_tokens,
                                                    model=instance.model)
 
     def run(self):
-        super().run()
-
-        # manage memory
+        super().run() # might need to change this since it logs prompt_start_timestamp
         self.instance.alloc_memory(self.request, self.memory)
         self.request.memory += self.memory
 
-    def complete_iteration(self):
-        # tokens processing
-        self.processed_tokens += self.processing_tokens
-        self.request.processed_tokens += self.processing_tokens
-        self.generated_tokens += self.generating_tokens
-        self.request.generated_tokens += self.generating_tokens
-        self.processing_tokens = 0
-        self.generating_tokens = 0
-
-    def is_complete(self):
-        return self.generated_tokens == self.token_size
-
     def complete(self):
         super().complete()
-
-        # update scheduler bookkeeping
-        self.instance.sched_pending_tokens -= 1
-
-        # ensure that we generated all tokens
-        assert self.processed_tokens == self.token_size
-        assert self.generated_tokens == self.token_size
-        assert self.request.generated_tokens == self.request.token_size
-        assert self.request.processed_tokens == self.request.prompt_size + \
-                                                self.request.token_size - 1
-
-        # manage memory
+        self.instance.sched_pending_tokens -= self.num_tokens
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0
@@ -294,17 +265,10 @@ class AttentionTask(Task):
 @dataclass(kw_only=True)
 class ExpertTask(Task):
     """
-    Expert tasks represent the sparse expert phase in a mixture of experts model.
+    Expert task represents the sparse expert phase in a mixture of experts model layer.
     """
-    layer_id: int
-    token_size: int
-    tokens_per_iteration: int = 1
     current_layer: int = 0
-    processing_tokens: int = 0
-    processed_tokens: int = 0
-    generating_tokens: int = 0
-    generated_tokens: int = 0
-    expert_id: int = 0
+    num_tokens: int = 0
     task_type: TaskType = TaskType.EXPERT
 
     def __hash__(self):
@@ -312,48 +276,83 @@ class ExpertTask(Task):
 
     @property
     def memory(self):
-        num_tokens = self.token_size
-        return self.request.estimate_kv_cache_size(num_tokens=num_tokens,
-                                                   model=self.instance.model)
+        return self.num_tokens * self.instance.model.hidden_size * self.instance.model.size.dtype_size
 
     def max_memory(self, instance):
-        num_tokens = self.token_size
-        return self.request.estimate_kv_cache_size(num_tokens=num_tokens,
-                                                   model=instance.model)
+        return self.num_tokens * instance.model.hidden_size * instance.model.size.dtype_size
 
     def run(self):
-        super().run()
-
-        # manage memory
+        super().run() # might need to change this since it logs prompt_start_timestamp
         self.instance.alloc_memory(self.request, self.memory)
         self.request.memory += self.memory
 
+    def complete(self):
+        super().complete()
+        self.instance.sched_pending_tokens -= self.num_tokens
+        if self.cleanup_memory:
+            self.instance.free_memory(self.request, self.request.memory)
+            self.request.memory = 0
+
+
+@dataclass(kw_only=True)
+class MoETask(Task):
+    """
+    MoE task represents a MoE token generation task.
+    Each iteration generates a new token.
+    """
+    
+    tokens_per_iteration: int = 1
+    current_layer: int = 0
+    prompt_size: int = 0
+    token_size: int = 0
+    processing_tokens: int = 0
+    processed_tokens: int = 0
+    generating_tokens: int = 0
+    generated_tokens: int = 0
+    task_type = TaskType.MOE
+
+    def __hash__(self):
+        return hash(self.node_id)
+
+    @property
+    def memory(self):
+        num_tokens = self.prompt_size + self.token_size
+        kv = self.request.estimate_kv_cache_size(num_tokens=num_tokens,
+                                                 model=self.instance.model)
+        act = self.instance.model.hidden_size * self.instance.model.size.dtype_size
+        prompt_phase = self.prompt_size * act
+        token_phase = self.instance.model.top_k_experts * act
+        return kv + max(prompt_phase, token_phase)
+
+    def max_memory(self, instance):
+        num_tokens = self.prompt_size + self.token_size
+        kv = self.request.estimate_kv_cache_size(num_tokens=num_tokens,
+                                                 model=instance.model)
+        act = instance.model.hidden_size * instance.model.size.dtype_size
+        prompt_phase = self.prompt_size * act
+        token_phase = instance.model.top_k_experts * act
+        return kv + max(prompt_phase, token_phase)
+
+    def run(self):
+        super().run()
+        self.instance.alloc_memory(self.request, self.memory)
+        self.request.memory += self.memory
+        
     def complete_iteration(self):
-        # tokens processing
         self.processed_tokens += self.processing_tokens
         self.request.processed_tokens += self.processing_tokens
         self.generated_tokens += self.generating_tokens
         self.request.generated_tokens += self.generating_tokens
         self.processing_tokens = 0
         self.generating_tokens = 0
-
+        
     def is_complete(self):
         return self.generated_tokens == self.token_size
 
     def complete(self):
         super().complete()
+        self.instance.sched_pending_tokens -= 1 # might need to change this
 
-        # update scheduler bookkeeping
-        self.instance.sched_pending_tokens -= 1
-
-        # ensure that we generated all tokens
-        assert self.processed_tokens == self.token_size
-        assert self.generated_tokens == self.token_size
-        assert self.request.generated_tokens == self.request.token_size
-        assert self.request.processed_tokens == self.request.prompt_size + \
-                                                self.request.token_size - 1
-
-        # manage memory
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0
