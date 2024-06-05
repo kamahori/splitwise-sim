@@ -54,6 +54,72 @@ class Request():
     slo: RequestSLO = field(default_factory=RequestSLO)
     executor: Executor = None
 
+    # TODO (keisuke): I want to stop hard coding this foolish thing
+    expert_0_0: int = 0
+    expert_0_1: int = 0
+    expert_1_0: int = 0
+    expert_1_1: int = 0
+    expert_2_0: int = 0
+    expert_2_1: int = 0
+    expert_3_0: int = 0
+    expert_3_1: int = 0
+    expert_4_0: int = 0
+    expert_4_1: int = 0
+    expert_5_0: int = 0
+    expert_5_1: int = 0
+    expert_6_0: int = 0
+    expert_6_1: int = 0
+    expert_7_0: int = 0
+    expert_7_1: int = 0
+    expert_8_0: int = 0
+    expert_8_1: int = 0
+    expert_9_0: int = 0
+    expert_9_1: int = 0
+    expert_10_0: int = 0
+    expert_10_1: int = 0
+    expert_11_0: int = 0
+    expert_11_1: int = 0
+    expert_12_0: int = 0
+    expert_12_1: int = 0
+    expert_13_0: int = 0
+    expert_13_1: int = 0
+    expert_14_0: int = 0
+    expert_14_1: int = 0
+    expert_15_0: int = 0
+    expert_15_1: int = 0
+    expert_16_0: int = 0
+    expert_16_1: int = 0
+    expert_17_0: int = 0
+    expert_17_1: int = 0
+    expert_18_0: int = 0
+    expert_18_1: int = 0
+    expert_19_0: int = 0
+    expert_19_1: int = 0
+    expert_20_0: int = 0
+    expert_20_1: int = 0
+    expert_21_0: int = 0
+    expert_21_1: int = 0
+    expert_22_0: int = 0
+    expert_22_1: int = 0
+    expert_23_0: int = 0
+    expert_23_1: int = 0
+    expert_24_0: int = 0
+    expert_24_1: int = 0
+    expert_25_0: int = 0
+    expert_25_1: int = 0
+    expert_26_0: int = 0
+    expert_26_1: int = 0
+    expert_27_0: int = 0
+    expert_27_1: int = 0
+    expert_28_0: int = 0
+    expert_28_1: int = 0
+    expert_29_0: int = 0
+    expert_29_1: int = 0
+    expert_30_0: int = 0
+    expert_30_1: int = 0
+    expert_31_0: int = 0
+    expert_31_1: int = 0
+
     def __post_init__(self):
         pass
 
