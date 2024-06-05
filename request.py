@@ -1,10 +1,10 @@
 import logging
 import random
-
+import json 
 from dataclasses import dataclass, field
 from enum import IntEnum
 from itertools import count
-
+import numpy as np 
 import networkx as nx
 
 from executor import Executor
@@ -414,6 +414,16 @@ class GenerativeMoERequest(Request):
         # # update DAG
         # self.dag.add_edge(attention_task, expert_task)
         # self.root_node = attention_task
+
+        # TODO (keisuke): now selecting the expert based on the popularity info here, 
+        # but ideally we want the simulator to be deterministic
+        np.random.seed(0)
+        expert_popularity_filename = "./data/expert_popularity_college_computer_science.json"
+        with open(expert_popularity_filename, "r") as f:
+            expert_popularity = json.load(f)
+            expert_selection_prob = np.array(expert_popularity["expert_popularity"]) # (32, 8)
+            # normalize
+            expert_selection_prob = expert_selection_prob / expert_selection_prob.sum(axis=1, keepdims=True)
         
         # we will generate the DAG involving all attention and expert layers for both prompt and token phases
         # first do prompt phase
@@ -426,9 +436,15 @@ class GenerativeMoERequest(Request):
             if i == 0:
                 self.root_node = attention_task
             # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
+            expert_selection_prompt = np.random.choice(8, size=(self.prompt_size, 2), p=expert_selection_prob[i])
+            # count the appearance of each value (0-7) in the `expert_selection_prompt`
+            expert_selection_prompt_count = np.zeros(8)
+            for j in range(8):
+                expert_selection_prompt_count[j] = np.sum(expert_selection_prompt == j)
+
             for j in range(self.n_experts):
                 expert_task = self.create_task(task_type=TaskType.EXPERT,
-                                              prompt_size=self.prompt_size // 8,
+                                              prompt_size=expert_selection_prompt_count[j],
                                               layer_id=i,
                                               expert_id=j)
                 self.dag.add_edge(attention_task, expert_task)
@@ -444,8 +460,9 @@ class GenerativeMoERequest(Request):
                         self.dag.add_edge(expert_task, attention_task)
                 
                 # draw two random numbers for expert ids
-                expert_id_1 = random.randint(0, 7)
-                expert_id_2 = random.randint(0, 7)
+                expert_tasks = np.random.choice(8, size=(1, 2), p=expert_selection_prob[i])[0]
+                expert_id_1 = expert_tasks[0]
+                expert_id_2 = expert_tasks[1]
                 expert_task_1 = self.create_task(task_type=TaskType.EXPERT,
                                                 token_size=1,
                                                 layer_id=layer_id,
@@ -456,10 +473,7 @@ class GenerativeMoERequest(Request):
                                                 expert_id=expert_id_2)
                 self.dag.add_edge(attention_task, expert_task_1)
                 self.dag.add_edge(attention_task, expert_task_2)
-                expert_tasks = [expert_task_1, expert_task_2]
                 
-            
-
     def __hash__(self):
         return hash(self.request_id)
 
