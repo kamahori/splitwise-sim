@@ -230,6 +230,9 @@ class AttentionTask(Task):
     """
     Attention task represents the attention phase in a mixture of experts model layer.
     """
+    layer_id: int
+    token_size: int
+    tokens_per_iteration: int = 1
     current_layer: int = 0
     num_tokens: int = 0
     task_type: TaskType = TaskType.ATTENTION
@@ -297,6 +300,9 @@ class MoETask(Task):
     MoE task represents a MoE token generation task.
     Each iteration generates a new token.
     """
+    
+    tokens_per_iteration: int = 1
+    current_layer: int = 0
     prompt_size: int = 0
     token_size: int = 0
     processing_tokens: int = 0
