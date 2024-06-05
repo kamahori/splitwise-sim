@@ -850,7 +850,7 @@ class DisaggregatedMOEInstance(Instance):
                  model,
                  processors,
                  overheads,
-                 max_batch_tokens,
+                 max_batch_tokens=256,
                  debug=False):
         super().__init__(instance_id,
                          application,
