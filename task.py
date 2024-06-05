@@ -13,8 +13,7 @@ class TaskType(IntEnum):
     PROMPT = 1
     TOKEN = 2,
     ATTENTION = 3,
-    EXPERT = 4,
-    MOE = 5
+    EXPERT = 4
 
 
 @dataclass(kw_only=True)
@@ -286,67 +285,6 @@ class ExpertTask(Task):
     def complete(self):
         super().complete()
         self.instance.sched_pending_tokens -= self.num_tokens
-        if self.cleanup_memory:
-            self.instance.free_memory(self.request, self.request.memory)
-            self.request.memory = 0
-
-
-@dataclass(kw_only=True)
-class MoETask(Task):
-    """
-    MoE task represents a MoE token generation task.
-    Each iteration generates a new token.
-    """
-    prompt_size: int = 0
-    token_size: int = 0
-    processing_tokens: int = 0
-    processed_tokens: int = 0
-    generating_tokens: int = 0
-    generated_tokens: int = 0
-    task_type = TaskType.MOE
-
-    def __hash__(self):
-        return hash(self.node_id)
-
-    @property
-    def memory(self):
-        num_tokens = self.prompt_size + self.token_size
-        kv = self.request.estimate_kv_cache_size(num_tokens=num_tokens,
-                                                 model=self.instance.model)
-        act = self.instance.model.hidden_size * self.instance.model.size.dtype_size
-        prompt_phase = self.prompt_size * act
-        token_phase = self.instance.model.top_k_experts * act
-        return kv + max(prompt_phase, token_phase)
-
-    def max_memory(self, instance):
-        num_tokens = self.prompt_size + self.token_size
-        kv = self.request.estimate_kv_cache_size(num_tokens=num_tokens,
-                                                 model=instance.model)
-        act = instance.model.hidden_size * instance.model.size.dtype_size
-        prompt_phase = self.prompt_size * act
-        token_phase = instance.model.top_k_experts * act
-        return kv + max(prompt_phase, token_phase)
-
-    def run(self):
-        super().run()
-        self.instance.alloc_memory(self.request, self.memory)
-        self.request.memory += self.memory
-        
-    def complete_iteration(self):
-        self.processed_tokens += self.processing_tokens
-        self.request.processed_tokens += self.processing_tokens
-        self.generated_tokens += self.generating_tokens
-        self.request.generated_tokens += self.generating_tokens
-        self.processing_tokens = 0
-        self.generating_tokens = 0
-        
-    def is_complete(self):
-        return self.generated_tokens == self.token_size
-
-    def complete(self):
-        super().complete()
-        self.instance.sched_pending_tokens -= 1 # might need to change this
-
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0
