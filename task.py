@@ -268,6 +268,7 @@ class ExpertTask(Task):
     num_tokens: int = 0
     expert_id: int = 0
     task_type: TaskType = TaskType.EXPERT
+    is_prompt: bool = False
 
     def __hash__(self):
         return hash(self.node_id)

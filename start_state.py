@@ -133,10 +133,10 @@ def moe(start_state_cfg, cluster, applications, **kwargs):
         # for attention, we will assign one attention instance for one server
         for server in all_servers[:n_attention]:
             for proc_id in range(0, len(server.processors), attention_parallelism.tensor_parallelism):
+                print("start spin up attention instance")
                 allocator.start_spin_up_instance(instance_cfg=attention_cfg,
                                                  processors=server.processors[proc_id:proc_id+attention_parallelism.tensor_parallelism],
                                                  parallelism=attention_parallelism,
-                                                 pre_start=True,
                                                  tag="attention")
         # we assign 256 experts to the number of instances n_expert
         # currently we do random assignment
@@ -161,10 +161,9 @@ def moe(start_state_cfg, cluster, applications, **kwargs):
             
         for i, server in enumerate(all_servers[n_attention:n_attention+n_expert]):
             for proc_id in range(0, len(server.processors), expert_parallelism.tensor_parallelism):
-                allocator.start_spin_up_instance(instance_cfg=expert_cfg,
+                allocator.start_spin_up_expert_instance(instance_cfg=expert_cfg,
                                                  processors=server.processors[proc_id:proc_id+expert_parallelism.tensor_parallelism],
                                                  parallelism=expert_parallelism,
-                                                 pre_start=True,
                                                  expert_info=expert_instance_assignment[i],
                                                  tag="expert")
 

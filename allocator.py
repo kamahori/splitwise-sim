@@ -39,7 +39,6 @@ class Allocator(ABC):
                                instance_cfg,
                                processors,
                                parallelism,
-                               pre_start=False,
                                tag=None):
         """
         Spin up a new instance of the application on specified processors.
@@ -60,6 +59,7 @@ class Allocator(ABC):
                                         processors=processors,
                                         overheads=self.instance_overheads,
                                         debug=self.debug)
+        self.finish_spin_up_instance(instance)
         
     def start_spin_up_expert_instance(self,
                                instance_cfg,

@@ -77,6 +77,7 @@ class Executor():
         if instance is None:
             instance = task.instance
         task.executor = self
+        # print(task)
         self.submitted.append(task)
         schedule_event(self.overheads.submit_task,
                        lambda instance=instance,task=task: \
@@ -88,6 +89,7 @@ class Executor():
         """
         Finishes the specified task.
         """
+        
         self.submitted.remove(task)
         successor_nodes = list(self.successors(task))
         # NOTE: assumes a single leaf node

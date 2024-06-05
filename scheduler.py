@@ -289,7 +289,7 @@ class MoEScheduler(Scheduler):
         self.expert_instances = {}
         # TODO (keisuke): distinguish between different experts
 
-    def add_attn_instance(self, instance):
+    def add_instance(self, instance):
         """
         Add attention instance
         NOTE: assumes instance tags are distinguishers, not h/w itself
@@ -853,6 +853,7 @@ class RandomMoEScheduler(MoEScheduler):
         """
         Assigns all nodes in request to a random instance
         """
+        print(len(self.attn_instances), len(self.expert_instances))
         if len(self.attn_instances) == 0 or len(self.expert_instances) == 0:
             raise ValueError("No instances available")
 
@@ -884,14 +885,15 @@ class RandomMoEScheduler(MoEScheduler):
         # for expert, we randomly choose an expert instance that holds the expert weight
         
         while len(curr_tasks) > 0:
+            # print(curr_tasks[0])
             if curr_tasks[0].task_type == TaskType.ATTENTION:
                 assert(len(curr_tasks) == 1)
-                curr_task = curr_tasks
+                curr_task = curr_tasks[0]
                 if curr_task.is_prompt:
                     curr_instance = np.random.choice(self.attn_instances)
-                    attn_instance_map[curr_task.layer_id] = curr_instance
+                    attn_instance_map[curr_task.current_layer] = curr_instance
                 else:
-                    curr_instance = attn_instance_map[curr_task.layer_id]
+                    curr_instance = attn_instance_map[curr_task.current_layer]
                 curr_task.instance = curr_instance
                 if len(prev_tasks) > 0:
                     for prev_task in prev_tasks:
@@ -900,13 +902,11 @@ class RandomMoEScheduler(MoEScheduler):
             elif curr_tasks[0].task_type == TaskType.EXPERT:
                 for curr_task in curr_tasks:
                     assert(curr_task.task_type == TaskType.EXPERT)
-                    expert_instances = self.get_expert_instance_list(curr_task.layer_id, curr_task.expert_id)
+                    expert_instances = self.get_expert_instance_list(curr_task.current_layer, curr_task.expert_id)
                     curr_task.instance = np.random.choice(expert_instances)
                     for prev_task in prev_tasks:
                             # TODO: Yile add bandwidth
                             self.add_act_transfer(request, prev_task, curr_task, prev_task.instance, curr_task.instance, 0, prev_task.num_tokens)
-            else:
-                raise ValueError(f"Unsupported task type: {curr_task.task_type}")
         
             prev_tasks = curr_tasks
-            curr_task = request.successors(curr_tasks[0])
+            curr_tasks = list(request.successors(curr_tasks[0]))

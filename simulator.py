@@ -141,6 +141,7 @@ class TraceSimulator(Simulator):
         for application_id, results_dict in sched_results.items():
             summary_results["application_id"].append(application_id)
             for key, values in results_dict.items():
+                print(key, values)
                 summary = utils.get_statistics(values)
                 # merge summary into summary_results
                 for metric, value in summary.items():

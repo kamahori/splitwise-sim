@@ -190,6 +190,7 @@ class Request():
         """
         NOTE: we don't track routing overheads
         """
+        print(f"Request {self.request_id} arrived at scheduler")
         assert self.state == RequestState.QUEUED_AT_ROUTER
         self.metrics.scheduler_arrival_timestamp = clock()
         self.metrics.router_queue_time = clock() - \
@@ -197,6 +198,7 @@ class Request():
         self.state = RequestState.QUEUED_AT_SCHEDULER
 
     def run_on_executor(self):
+        print(f"Request {self.request_id} run on executor")
         assert self.state == RequestState.QUEUED_AT_SCHEDULER
         self.metrics.executor_start_timestamp = clock()
         self.metrics.scheduler_queue_time = clock() - \
@@ -207,6 +209,7 @@ class Request():
         """
         NOTE: we don't track executor <--> scheduler communication overheads
         """
+        print(f"Request {self.request_id} complete at scheduler")
         assert self.state == RequestState.RUNNING_ON_EXECUTOR
         self.metrics.scheduler_completion_timestamp = clock()
         self.metrics.service_time += clock() - \
@@ -279,7 +282,7 @@ class Request():
         Returns a Request from a Pandas dictionary.
         """
         if request_dict["request_type"] == RequestType.GENERATIVE_LLM:
-            request = GenerativeLLMRequest(**request_dict)
+            request = GenerativeMoERequest(**request_dict)
         else:
             raise ValueError(f"Unsupported request type: {request_dict['request_type']}")
         return request
@@ -395,7 +398,7 @@ class GenerativeMoERequest(Request):
     prompt_size: int = 0
     token_size: int = 0
     kv_cache_size: int = 0
-    n_layers: int = 0 # TODO (keisuke): Number of layers in the MoE model
+    n_layers: int = 32 # TODO (keisuke): Number of layers in the MoE model
     n_experts: int = 8 # Number of experts in the MoE model
     flow_node: Flow = None
     cost: float = 0.
@@ -418,7 +421,7 @@ class GenerativeMoERequest(Request):
         # TODO (keisuke): now selecting the expert based on the popularity info here, 
         # but ideally we want the simulator to be deterministic
         np.random.seed(0)
-        expert_popularity_filename = "./data/expert_popularity_college_computer_science.json"
+        expert_popularity_filename = "/home/yilegu/fiddler/benchmarks/results/popularity/mixtral_8x7b_instruct/expert_popularity_machine_learning.json"
         with open(expert_popularity_filename, "r") as f:
             expert_popularity = json.load(f)
             expert_selection_prob = np.array(expert_popularity["expert_popularity"]) # (32, 8)
@@ -430,12 +433,14 @@ class GenerativeMoERequest(Request):
         expert_tasks = []
         # TODO: double check the size argument to task
         for i in range(self.n_layers):
+            print(f"Creating layer {i}")
             attention_task = self.create_task(task_type=TaskType.ATTENTION,
-                                           prompt_size=self.prompt_size,
-                                           layer_id=i,
+                                           num_tokens=self.prompt_size,
+                                           current_layer=i,
                                            is_prompt=True
                                            )
             if i == 0:
+                print("setting root node")
                 self.root_node = attention_task
             # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
             expert_selection_prompt = np.random.choice(8, size=(self.prompt_size, 2), p=expert_selection_prob[i])
@@ -446,8 +451,8 @@ class GenerativeMoERequest(Request):
 
             for j in range(self.n_experts):
                 expert_task = self.create_task(task_type=TaskType.EXPERT,
-                                              prompt_size=expert_selection_prompt_count[j],
-                                              layer_id=i,
+                                              num_tokens=expert_selection_prompt_count[j],
+                                              current_layer=i,
                                               expert_id=j,
                                               is_prompt=True
                                               )
@@ -457,8 +462,8 @@ class GenerativeMoERequest(Request):
         for token_id in range(self.token_size):
             for layer_id in range(self.n_layers):
                 attention_task = self.create_task(task_type=TaskType.ATTENTION,
-                                               token_size=1,
-                                               layer_id=layer_id,
+                                               num_tokens=1,
+                                               current_layer=layer_id,
                                                is_prompt=False
                                                )
                 if len(expert_tasks) != 0:
@@ -470,14 +475,14 @@ class GenerativeMoERequest(Request):
                 expert_id_1 = expert_tasks[0]
                 expert_id_2 = expert_tasks[1]
                 expert_task_1 = self.create_task(task_type=TaskType.EXPERT,
-                                                token_size=1,
-                                                layer_id=layer_id,
+                                                num_tokens=1,
+                                                current_layer=layer_id,
                                                 expert_id=expert_id_1,
                                                 is_prompt=False
                                                 )
                 expert_task_2 = self.create_task(task_type=TaskType.EXPERT,
-                                                token_size=1,
-                                                layer_id=layer_id,
+                                                num_tokens=1,
+                                                current_layer=layer_id,
                                                 expert_id=expert_id_2,
                                                 is_prompt=False
                                                 )

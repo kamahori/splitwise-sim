@@ -478,40 +478,40 @@ if __name__ == "__main__":
         trace_filename_template="traces/rr_conv_{}_2min.csv")
     print("Generated conv 2min traces")
 
-    # generate moe request traces
-    generate_moe_code_traces(
-        max_requests=1000000,
-        end_time=600,
-        request_rates=list(range(30, 251, 10)),
-        code_distributions_file="data/code_distributions.csv",
-        expert_popularity_file="data/expert_popularity_college_computer_science.json",
-        trace_filename_template="traces/rr_moe_code_{}.csv")
-    print("Generated moe code traces")
+    # # generate moe request traces
+    # generate_moe_code_traces(
+    #     max_requests=1000000,
+    #     end_time=600,
+    #     request_rates=list(range(30, 251, 10)),
+    #     code_distributions_file="data/code_distributions.csv",
+    #     expert_popularity_file="data/expert_popularity_college_computer_science.json",
+    #     trace_filename_template="traces/rr_moe_code_{}.csv")
+    # print("Generated moe code traces")
 
-    generate_moe_conv_traces(
-        max_requests=1000000,
-        end_time=600,
-        request_rates=list(range(30, 251, 10)),
-        conv_distributions_file="data/conv_distributions.csv",
-        expert_popularity_file="data/expert_popularity_college_computer_science.json",
-        trace_filename_template="traces/rr_moe_conv_{}.csv")
-    print("Generated moe conv traces")
+    # generate_moe_conv_traces(
+    #     max_requests=1000000,
+    #     end_time=600,
+    #     request_rates=list(range(30, 251, 10)),
+    #     conv_distributions_file="data/conv_distributions.csv",
+    #     expert_popularity_file="data/expert_popularity_college_computer_science.json",
+    #     trace_filename_template="traces/rr_moe_conv_{}.csv")
+    # print("Generated moe conv traces")
 
-    # generate moe request traces for 2 min
-    generate_moe_code_traces(
-        max_requests=1000000,
-        end_time=120,
-        request_rates=list(range(30, 101, 10)),
-        code_distributions_file="data/code_distributions.csv",
-        expert_popularity_file="data/expert_popularity_college_computer_science.json",
-        trace_filename_template="traces/rr_moe_code_{}_2min.csv")
-    print("Generated moe code 2min traces")
+    # # generate moe request traces for 2 min
+    # generate_moe_code_traces(
+    #     max_requests=1000000,
+    #     end_time=120,
+    #     request_rates=list(range(30, 101, 10)),
+    #     code_distributions_file="data/code_distributions.csv",
+    #     expert_popularity_file="data/expert_popularity_college_computer_science.json",
+    #     trace_filename_template="traces/rr_moe_code_{}_2min.csv")
+    # print("Generated moe code 2min traces")
 
-    generate_moe_conv_traces(
-        max_requests=1000000,
-        end_time=120,
-        request_rates=list(range(30, 101, 10)),
-        conv_distributions_file="data/conv_distributions.csv",
-        expert_popularity_file="data/expert_popularity_college_computer_science.json",
-        trace_filename_template="traces/rr_moe_conv_{}_2min.csv")
-    print("Generated moe conv 2min traces")
+    # generate_moe_conv_traces(
+    #     max_requests=1000000,
+    #     end_time=120,
+    #     request_rates=list(range(30, 101, 10)),
+    #     conv_distributions_file="data/conv_distributions.csv",
+    #     expert_popularity_file="data/expert_popularity_college_computer_science.json",
+    #     trace_filename_template="traces/rr_moe_conv_{}_2min.csv")
+    # print("Generated moe conv 2min traces")

@@ -185,11 +185,10 @@ class Instance():
                                      max_batch_tokens=max_batch_tokens,
                                      max_preemptions=max_preemptions,
                                      **kwargs)
-        elif instance_type == "MoE":
-            max_batch_size = instance_cfg.max_batch_size
+        elif instance_type == "DisaggregatedMOEInstance":
+            # max_batch_size = instance_cfg.max_batch_size
             max_batch_tokens = instance_cfg.max_batch_tokens
-            return MoEInstance(max_batch_size=max_batch_size,
-                               max_batch_tokens=max_batch_tokens,
+            return DisaggregatedMOEInstance(max_batch_tokens=max_batch_tokens,
                                **kwargs)
         else:
             raise ValueError(f"Instance type {instance_type} not supported")
@@ -886,10 +885,12 @@ class DisaggregatedMOEInstance(Instance):
         task.instance = self
         task.arrive()
         self.add_pending_task(task)
-
+        print(f"Task arrived on instance {self.instance_id}")
+        print(f"{len(self.batch)} tasks in batch, {self.memory + task.memory} , {self.max_memory}, {task.num_tokens}, {self.max_batch_tokens}")
         if len(self.batch) == 0:
             if self.memory + task.memory <= self.max_memory and \
                 task.num_tokens <= self.max_batch_tokens:
+                print("adding task to batch")
                 self.add_to_batch(task)
                 self.run_batch(task)
 
@@ -907,6 +908,7 @@ class DisaggregatedMOEInstance(Instance):
 
     def run_batch(self):
         for task in self.batch:
+            print(f"Running task on instance {self.instance_id}")
             task.run()
             self.remove_pending_task(task)
         duration = get_duration(task=self.batch[0], batch=self.batch, instance=self)
