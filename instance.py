@@ -850,7 +850,6 @@ class DisaggregatedMOEInstance(Instance):
                  model,
                  processors,
                  overheads,
-                 max_batch_size,
                  max_batch_tokens,
                  debug=False):
         super().__init__(instance_id,
@@ -861,3 +860,64 @@ class DisaggregatedMOEInstance(Instance):
                          processors,
                          overheads,
                          debug)
+        self.max_batch_tokens = max_batch_tokens
+        self.batch_tokens = 0
+
+    def add_pending_task(self, task):
+        self.pending_queue.append(task)
+
+    def remove_pending_task(self, task):
+        self.pending_queue.remove(task)
+
+    def add_to_batch(self, task):
+        self.batch_tokens += task.num_tokens
+        self.batch.append(task)
+
+    def remove_from_batch(self, task):
+        self.batch_tokens -= task.num_tokens
+        self.batch.remove(task)
+
+    def task_arrival(self, task):
+        """
+        Greedy batching, FIFO execution.
+        If no batch is running, run the task (batch of one).
+        When the current batch finishes, build the next batch from the first n queued tasks that fit in memory.
+        """
+        task.instance = self
+        task.arrive()
+        self.add_pending_task(task)
+
+        if len(self.batch) == 0:
+            if self.memory + task.memory <= self.max_memory and \
+                task.num_tokens <= self.max_batch_tokens:
+                self.add_to_batch(task)
+                self.run_batch(task)
+
+    def form_batch(self):
+        """
+        Build a batch from pending tasks.
+        """
+        batch_memory = 0
+        batch_tokens = 0
+        for task in self.pending_queue:
+            if self.memory + batch_memory + task.memory <= self.max_memory and \
+                batch_tokens + task.num_tokens <= self.max_batch_tokens:
+                self.remove_pending_task(task)
+                self.add_to_batch(task)
+
+    def run_batch(self):
+        for task in self.batch:
+            task.run()
+            self.remove_pending_task(task)
+        duration = get_duration(task=self.batch[0], batch=self.batch, instance=self)
+        schedule_event(duration, lambda instance=self: instance.complete_batch())
+
+    def complete_batch(self):
+        for task in self.batch:
+            task.complete()
+            task.executor.finish_task(task, self)
+            self.remove_from_batch(task)
+            self.completed_queue.append(task)
+        self.form_batch()
+        if len(self.batch) > 0:
+            self.run_batch()

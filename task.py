@@ -229,8 +229,6 @@ class AttentionTask(Task):
     """
     Attention task represents the attention phase in a mixture of experts model layer.
     """
-    layer_id: int
-    tokens_per_iteration: int = 1
     current_layer: int = 0
     num_tokens: int = 0
     is_prompt: bool = False
@@ -289,6 +287,9 @@ class ExpertTask(Task):
     def complete(self):
         super().complete()
         self.instance.sched_pending_tokens -= self.num_tokens
+        if self.current_layer == self.instance.num_layers:
+            self.request.generated_tokens(1)
+            self.request.processed_tokens(self.num_tokens)
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0
