@@ -1,4 +1,5 @@
 import logging
+import random
 
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -52,6 +53,72 @@ class Request():
     metrics: RequestMetrics = field(default_factory=RequestMetrics)
     slo: RequestSLO = field(default_factory=RequestSLO)
     executor: Executor = None
+
+    # TODO (keisuke): I want to stop hard coding this foolish thing
+    expert_0_0: int = 0
+    expert_0_1: int = 0
+    expert_1_0: int = 0
+    expert_1_1: int = 0
+    expert_2_0: int = 0
+    expert_2_1: int = 0
+    expert_3_0: int = 0
+    expert_3_1: int = 0
+    expert_4_0: int = 0
+    expert_4_1: int = 0
+    expert_5_0: int = 0
+    expert_5_1: int = 0
+    expert_6_0: int = 0
+    expert_6_1: int = 0
+    expert_7_0: int = 0
+    expert_7_1: int = 0
+    expert_8_0: int = 0
+    expert_8_1: int = 0
+    expert_9_0: int = 0
+    expert_9_1: int = 0
+    expert_10_0: int = 0
+    expert_10_1: int = 0
+    expert_11_0: int = 0
+    expert_11_1: int = 0
+    expert_12_0: int = 0
+    expert_12_1: int = 0
+    expert_13_0: int = 0
+    expert_13_1: int = 0
+    expert_14_0: int = 0
+    expert_14_1: int = 0
+    expert_15_0: int = 0
+    expert_15_1: int = 0
+    expert_16_0: int = 0
+    expert_16_1: int = 0
+    expert_17_0: int = 0
+    expert_17_1: int = 0
+    expert_18_0: int = 0
+    expert_18_1: int = 0
+    expert_19_0: int = 0
+    expert_19_1: int = 0
+    expert_20_0: int = 0
+    expert_20_1: int = 0
+    expert_21_0: int = 0
+    expert_21_1: int = 0
+    expert_22_0: int = 0
+    expert_22_1: int = 0
+    expert_23_0: int = 0
+    expert_23_1: int = 0
+    expert_24_0: int = 0
+    expert_24_1: int = 0
+    expert_25_0: int = 0
+    expert_25_1: int = 0
+    expert_26_0: int = 0
+    expert_26_1: int = 0
+    expert_27_0: int = 0
+    expert_27_1: int = 0
+    expert_28_0: int = 0
+    expert_28_1: int = 0
+    expert_29_0: int = 0
+    expert_29_1: int = 0
+    expert_30_0: int = 0
+    expert_30_1: int = 0
+    expert_31_0: int = 0
+    expert_31_1: int = 0
 
     def __post_init__(self):
         pass
@@ -310,6 +377,148 @@ class GenerativeLLMRequest(Request):
         Returns the overhead of generating the nth token.
         """
         return self.nodes[1].metrics.start_timestamp - self.nodes[0].metrics.completion_timestamp
+
+@dataclass(kw_only=True)
+class GenerativeMoERequest(Request):
+    """
+    GenerativeMoERequest are requests that generate tokens from a prompt.
+    Attention and expert layers are disaggregated.
+    Activation shipping is represented using Flows.
+    NOTE: Assumes that KV-cache is uniformly split across all GPUs.
+    NOTE: Multi-prompt chat conversations are not supported here.
+    """
+    max_seq_len: int = 0
+    processed_tokens: int
+    _processed_tokens: int = 0
+    generated_tokens: int
+    _generated_tokens: int = 0
+    prompt_size: int = 0
+    token_size: int = 0
+    kv_cache_size: int = 0
+    n_layers: int = 0 # TODO (keisuke): Number of layers in the MoE model
+    n_experts: int = 8 # Number of experts in the MoE model
+    flow_node: Flow = None
+    cost: float = 0.
+    memory: float = 0.
+    metrics: GenerativeLLMRequestMetrics = field(
+        default_factory=GenerativeLLMRequestMetrics)
+
+    def __post_init__(self):
+        self.max_seq_len = self.prompt_size + self.token_size
+        # create prompt and token tasks
+        # TODO (keisuke): determine number of tokens for each based on expert popularity info
+        # attention_task = self.create_task(task_type=TaskType.ATTENTION,
+        #                                prompt_size=self.prompt_size)
+        # expert_task = self.create_task(task_type=TaskType.EXPERT,
+        #                               token_size=self.token_size - 1)
+        # # update DAG
+        # self.dag.add_edge(attention_task, expert_task)
+        # self.root_node = attention_task
+        
+        # we will generate the DAG involving all attention and expert layers for both prompt and token phases
+        # first do prompt phase
+        expert_tasks = []
+        # TODO: double check the size argument to task
+        for i in range(self.n_layers):
+            attention_task = self.create_task(task_type=TaskType.ATTENTION,
+                                           prompt_size=self.prompt_size,
+                                           layer_id=i)
+            if i == 0:
+                self.root_node = attention_task
+            # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
+            for j in range(self.n_experts):
+                expert_task = self.create_task(task_type=TaskType.EXPERT,
+                                              prompt_size=self.prompt_size // 8,
+                                              layer_id=i,
+                                              expert_id=j)
+                self.dag.add_edge(attention_task, expert_task)
+                expert_tasks.append(expert_task)
+        # then do token phase
+        for token_id in range(self.token_size):
+            for layer_id in range(self.n_layers):
+                attention_task = self.create_task(task_type=TaskType.ATTENTION,
+                                               token_size=1,
+                                               layer_id=layer_id)
+                if len(expert_tasks) != 0:
+                    for expert_task in expert_tasks:
+                        self.dag.add_edge(expert_task, attention_task)
+                
+                # draw two random numbers for expert ids
+                expert_id_1 = random.randint(0, 7)
+                expert_id_2 = random.randint(0, 7)
+                expert_task_1 = self.create_task(task_type=TaskType.EXPERT,
+                                                token_size=1,
+                                                layer_id=layer_id,
+                                                expert_id=expert_id_1)
+                expert_task_2 = self.create_task(task_type=TaskType.EXPERT,
+                                                token_size=1,
+                                                layer_id=layer_id,
+                                                expert_id=expert_id_2)
+                self.dag.add_edge(attention_task, expert_task_1)
+                self.dag.add_edge(attention_task, expert_task_2)
+                expert_tasks = [expert_task_1, expert_task_2]
+                
+            
+
+    def __hash__(self):
+        return hash(self.request_id)
+
+    @property
+    def processed_tokens(self):
+        """
+        Returns the number of prompt tokens processed so far.
+        """
+        return self._processed_tokens
+
+    @processed_tokens.setter
+    def processed_tokens(self, processed_tokens):
+        """
+        Sets the number of prompt tokens processed so far.
+        """
+        if isinstance(processed_tokens, property):
+            processed_tokens = 0
+        if processed_tokens > self.prompt_size + self.token_size:
+            print(processed_tokens, self.prompt_size + self.token_size)
+            raise ValueError("Processed tokens limit exceeded")
+        self._processed_tokens = processed_tokens
+
+    @property
+    def generated_tokens(self):
+        """
+        Returns the number of tokens generated so far.
+        """
+        return self._generated_tokens
+
+    @generated_tokens.setter
+    def generated_tokens(self, generated_tokens):
+        """
+        Sets the number of tokens generated so far.
+        """
+        if isinstance(generated_tokens, property):
+            generated_tokens = 0
+        if generated_tokens > self.max_seq_len:
+            raise ValueError("Maximum sequence length exceeded")
+        self._generated_tokens = generated_tokens
+
+
+    def estimate_kv_cache_size(self, num_tokens=None, model=None):
+        """
+        Returns the KV-cache size after generating num_tokens
+        Requires the Request root node to be allocated on an Instance.
+        """
+        if num_tokens is None:
+            num_tokens = self.generated_tokens
+        if model is None:
+            model = self.root_node.instance.model
+        return 2 * self.batch_size * num_tokens * model.architecture.hidden_size \
+                * model.architecture.num_layers * model.size.dtype_size
+
+    def get_nth_token_overhead(self):
+        """
+        Returns the overhead of generating the nth token.
+        """
+        return self.nodes[1].metrics.start_timestamp - self.nodes[0].metrics.completion_timestamp
+
 
 
 if __name__ == "__main__":

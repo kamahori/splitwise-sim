@@ -8,7 +8,7 @@ import pandas as pd
 from hydra.utils import get_original_cwd
 from scipy.interpolate import interp1d
 
-from task import TaskType, PromptTask, TokenTask, AttentionTask, ExpertTask
+from task import TaskType, PromptTask, TokenTask
 
 
 performance_model = None
@@ -261,10 +261,12 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
     PerformanceModel for disaggregated mixture of experts, based on a CSV database.
     Gives durations for AttentionTask and ExpertTask.
     """
-    def __init__(self, db_path):
+    def __init__(self, db_path, network_latency_path):
         super().__init__()
         self.db = pd.read_csv(os.path.join(get_original_cwd(), db_path),
                               dtype={"model": "category", "hardware": "category"})
+        self.network_latency = pd.read_csv(os.path.join(get_original_cwd(), network_latency_path),
+                              dtype={"connection": "category", "fan_in": "category"})
 
         self.db = self.db[["model",
                            "hardware",
@@ -275,11 +277,16 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                            "attention_time",
                            "routing_time",
                            "expert_time"]]
+        self.network_latency = self.network_latency[["data_size",
+                                                     "connection",
+                                                     "fan_in",
+                                                     "latency"]]
 
         # convert to seconds
         self.db["attention_time"] = self.db["attention_time"] / 1000
         self.db["routing_time"] = self.db["routing_time"] / 1000
         self.db["expert_time"] = self.db["expert_time"] / 1000
+        self.network_latency["latency"] = self.network_latency["latency"] / 1000
 
         self.init_predictor()
 
@@ -290,9 +297,11 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
         self.attention_time_predictors = {}
         self.routing_time_predictors = {}
         self.expert_time_predictors = {}
+        self.network_time_predictors = {}
         self.attention_time_cache = {}
         self.routing_time_cache = {}
         self.expert_time_cache = {}
+        self.network_time_cache = {}
 
         for model in self.db["model"].unique():
             for hardware in self.db["hardware"].unique():
@@ -316,6 +325,19 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                     y = db_subset[["batch_tokens", "expert_time"]].groupby("batch_tokens").median()["expert_time"]
                     self.expert_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
                                                                     x, y, fill_value="extrapolate")
+        
+        for connection in self.db["connection"].unique():
+            for fan_in in self.db["fan_in"].unique():
+                mask = (self.network_latency["data_size"] == data_size) & \
+                        (self.network_latency["connection"] == connection) & \
+                        (self.network_latency["fan_in"] == fan_in)
+                db_subset = self.network_latency[mask].copy()
+                if len(db_subset) == 0:
+                    continue
+                x = db_subset[["data_size", "latency"]].groupby("data_size").median().index
+                y = db_subset[["data_size", "latency"]].groupby("data_size").median()["latency"]
+                self.network_time_predictors[(connection, fan_in)] = interp1d(
+                                                                x, y, fill_value="extrapolate")
 
     def _match(self, **kwargs):
         """
@@ -324,6 +346,15 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
         mask = True
         for k, v in kwargs.items():
             mask &= (self.db[k] == v)
+        return mask
+
+    def _match_network(self, **kwargs):
+        """
+        Returns a boolean mask for the network latency database from kwargs.
+        """
+        mask = True
+        for k, v in kwargs.items():
+            mask &= (self.network_latency[k] == v)
         return mask
 
     def predict_new_row(self, **kwargs):
@@ -346,6 +377,22 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
         new_row["expert_time"] = expert_time
         self.db = pd.concat([self.db, new_row], ignore_index=True)
         return new_row
+    
+    def predict_new_row_network(self, **kwargs):
+        """
+        Predicts the network latency for a new row.
+        Inserts the new row into the network latency database.
+        """
+        connection = kwargs["connection"]
+        fan_in = kwargs["fan_in"]
+        data_size = kwargs["data_size"]
+        new_row = pd.DataFrame(kwargs, index=[0])
+
+        latency = self.network_time_predictors[(connection, fan_in)](data_size)
+
+        new_row["latency"] = latency
+        self.network_latency = pd.concat([self.network_latency, new_row], ignore_index=True)
+        return new_row
 
     def get_time(self, task_time, **kwargs):
         """
@@ -359,7 +406,22 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
             t_time = new_row[task_time][0]
         return t_time
     
-    def get_duration(self, task, batch, instance, *args, **kwargs):
+    def get_network_time(self, connection, fan_in, **kwargs):
+        """
+        Returns the network latency from the database.
+        """
+        network_time = self.network_latency[
+            self._match_network(connection=connection, fan_in=fan_in)
+        ]["latency"].median()
+        # if not found, predict
+        if math.isnan(network_time):
+            new_row = self.predict_new_row_network(connection=connection, fan_in=fan_in, **kwargs)
+            network_time = new_row["latency"][0]
+        return network_time
+
+    def get_duration(self, task, batch, instance, connection="NV", fan_in=1, *args, **kwargs):
+        # TODO(keisuke): configure connection (NV and IB) and fan_in factor
+        # Also consider expert popularity
         model = instance.model.name
         hardware = instance.processors[0].name
         tensor_parallel = instance.model.parallelism.tensor_parallelism
@@ -381,7 +443,8 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                                          prompt_size=prompt_size,
                                          batch_size=batch_size,
                                          token_size=token_size)
-            return (attention_time + routing_time)
+            network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_size)
+            return (attention_time + routing_time + network_time)
         elif task.task_type == TaskType.EXPERT:
             prompt_size = task.request.prompt_size
             token_size = task.request.token_size
@@ -394,7 +457,8 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                                         batch_size=batch_size,
                                         token_size=token_size,
                                         batch=batch)
-            return expert_time
+            network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_size)
+            return (expert_time + network_time)
         else:
             raise NotImplementedError
 

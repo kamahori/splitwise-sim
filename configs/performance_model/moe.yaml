@@ -1,3 +1,4 @@
 _target_: performance_model.MOEPerformanceModel
 
 db_path: data/mixtral.csv
+network_latency_path: data/network_latency.csv
