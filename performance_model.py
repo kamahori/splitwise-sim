@@ -8,7 +8,7 @@ import pandas as pd
 from hydra.utils import get_original_cwd
 from scipy.interpolate import interp1d
 
-from task import TaskType, PromptTask, TokenTask
+from task import TaskType, PromptTask, TokenTask, AttentionTask, ExpertTask
 
 
 performance_model = None
@@ -339,6 +339,146 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                 self.network_time_predictors[(connection, fan_in)] = interp1d(
                                                                 x, y, fill_value="extrapolate")
 
+        """
+        Returns a boolean mask for the network latency database from kwargs.
+        """
+        mask = True
+        for k, v in kwargs.items():
+            mask &= (self.network_latency[k] == v)
+        return mask
+
+    def get_time(self, name, **kwargs):
+        cache_key = (kwargs['model'], kwargs['hardware'], kwargs['tensor_parallel'], kwargs['batch_tokens'])
+        predictors_key = (kwargs['model'], kwargs['hardware'], kwargs['tensor_parallel'])
+        if name == "attention":
+            attention_time = self.attention_time_cache.get(cache_key)
+            if attention_time is None:
+                attention_time = float(self.attention_time_predictors[predictors_key](kwargs['batch_tokens']))
+                self.attention_time_cache[cache_key] = attention_time
+            return attention_time
+        elif name == "routing":
+            routing_time = self.routing_time_cache.get(cache_key)
+            if routing_time is None:
+                routing_time = float(self.routing_time_predictors[predictors_key](kwargs['batch_tokens']))
+                self.routing_time_cache[cache_key] = routing_time
+            return routing_time
+        elif name == "expert":
+            expert_time = self.expert_time_cache.get(cache_key)
+            if expert_time is None:
+                expert_time = float(self.expert_time_predictors[predictors_key](kwargs['batch_tokens']))
+                self.expert_time_cache[cache_key] = expert_time
+            return expert_time
+        else:
+            raise ValueError
+    
+    def get_network_time(self, **kwargs):
+        cache_key = (kwargs['connection'], kwargs['fan_in'], kwargs['data_size'])
+        predictors_key = (kwargs['connection'], kwargs['fan_in'])
+        network_time = self.network_time_cache.get(cache_key)
+        if network_time is None:
+            network_time = float(self.network_time_predictors[predictors_key](kwargs['data_size']))
+            self.network_time_cache[cache_key] = network_time
+        return network_time
+
+    def get_duration(self, task, batch, instance, connection="NV", fan_in=1, *args, **kwargs):
+        # TODO(keisuke): configure connection (NV and IB) and fan_in factor
+        # Also consider expert popularity
+
+        # All tasks should be of same type
+        batch_tokens = 0
+        for _task in batch:
+            if _task.task_type == task.task_type:
+                batch_tokens += _task.num_tokens
+            else:
+                raise NotImplementedError
+            
+        time_args = {'model': instance.model.name,
+                     'hardware': instance.processors[0].name,
+                     'tensor_parallelism': instance.model.parallelism.tensor_parallelism,
+                     'batch_tokens': batch_tokens}
+        
+        network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_tokens)
+        if task.task_type == TaskType.ATTENTION:
+            attention_time = self.get_time("attention", **time_args)
+            routing_time = self.get_time("routing", **time_args)
+            return attention_time + routing_time + network_time
+        elif task.task_type == TaskType.EXPERT:
+            expert_time = self.get_time("expert", **time_args)
+            return expert_time + network_time
+        else:
+            raise NotImplementedError
+
+    def get_iteration_duration(self, batch, instance, *args, **kwargs):
+        raise NotImplementedError
+
+
+class MOEPromptPerformanceModel(PerformanceModel):
+    """
+    PerformanceModel for mixture of experts, based on a CSV database.
+    Gives durations for PromptTask.
+    """
+    def __init__(self, db_path, network_latency_path):
+        super().__init__()
+        self.db = pd.read_csv(os.path.join(get_original_cwd(), db_path),
+                              dtype={"model": "category", "hardware": "category"})
+        self.network_latency = pd.read_csv(os.path.join(get_original_cwd(), network_latency_path),
+                              dtype={"connection": "category", "fan_in": "category"})
+
+        self.db = self.db[["model",
+                           "hardware",
+                           "tensor_parallel",
+                           "prompt_size",
+                           "token_size",
+                           "batch_size",
+                           "attention_time",
+                           "routing_time",
+                           "expert_time"]]
+        self.network_latency = self.network_latency[["data_size",
+                                                     "connection",
+                                                     "fan_in",
+                                                     "latency"]]
+
+        # convert to seconds
+        self.db["attention_time"] = self.db["attention_time"] / 1000
+        self.db["routing_time"] = self.db["routing_time"] / 1000
+        self.db["expert_time"] = self.db["expert_time"] / 1000
+        self.network_latency["latency"] = self.network_latency["latency"] / 1000
+
+        self.init_predictor()
+
+    def init_predictor(self):
+        """
+        Predict using number of tokens in the batch.
+        """
+        self.prompt_time_cache = {}
+
+        self.attention_time_predictors = {}
+        self.routing_time_predictors = {}
+        self.expert_time_predictors = {}
+
+        for model in self.db["model"].unique():
+            for hardware in self.db["hardware"].unique():
+                for tensor_parallel in self.db["tensor_parallel"].unique():
+                    mask = (self.db["model"] == model) & \
+                            (self.db["hardware"] == hardware) & \
+                            (self.db["tensor_parallel"] == tensor_parallel)
+                    db_subset = self.db[mask].copy()
+                    if len(db_subset) == 0:
+                        continue
+                    db_subset["batch_tokens"] = db_subset["prompt_size"] * db_subset["batch_size"]
+                    x = db_subset[["batch_tokens", "attention_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "attention_time"]].groupby("batch_tokens").median()["attention_time"]
+                    self.attention_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+                    x = db_subset[["batch_tokens", "routing_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "routing_time"]].groupby("batch_tokens").median()["routing_time"]
+                    self.routing_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+                    x = db_subset[["batch_tokens", "expert_time"]].groupby("batch_tokens").median().index
+                    y = db_subset[["batch_tokens", "expert_time"]].groupby("batch_tokens").median()["expert_time"]
+                    self.expert_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
+                                                                    x, y, fill_value="extrapolate")
+        
     def _match(self, **kwargs):
         """
         Returns a boolean mask for the database from kwargs.
@@ -346,15 +486,6 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
         mask = True
         for k, v in kwargs.items():
             mask &= (self.db[k] == v)
-        return mask
-
-    def _match_network(self, **kwargs):
-        """
-        Returns a boolean mask for the network latency database from kwargs.
-        """
-        mask = True
-        for k, v in kwargs.items():
-            mask &= (self.network_latency[k] == v)
         return mask
 
     def predict_new_row(self, **kwargs):
@@ -377,93 +508,51 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
         new_row["expert_time"] = expert_time
         self.db = pd.concat([self.db, new_row], ignore_index=True)
         return new_row
+
+    def get_time(self, name, **kwargs):
+        key = (kwargs['model'], kwargs['hardware'], kwargs['tensor_parallel'])
+        if name == "attention":
+            return float(self.attention_time_predictors[key](kwargs['batch_tokens']))
     
-    def predict_new_row_network(self, **kwargs):
+    def get_prompt_time(self, **kwargs):
         """
-        Predicts the network latency for a new row.
-        Inserts the new row into the network latency database.
+        Estimates prompt time via token_size = 1.
+        This time is for a single layer.
         """
-        connection = kwargs["connection"]
-        fan_in = kwargs["fan_in"]
-        data_size = kwargs["data_size"]
-        new_row = pd.DataFrame(kwargs, index=[0])
+        cache_key = (kwargs['model'],
+                     kwargs['hardware'],
+                     kwargs['tensor_parallel'],
+                     kwargs['batch_tokens'])
+        
+        prompt_time = self.prompt_time_cache.get(cache_key)
+        if prompt_time is None:
+            attention = self.get_time("attention", **kwargs)
+            routing = self.get_time("routing", **kwargs)
+            expert = self.get_time("expert", **kwargs)
+            prompt_time = attention + routing + expert
+            self.prompt_time_cache[cache_key] = prompt_time
 
-        latency = self.network_time_predictors[(connection, fan_in)](data_size)
+        return prompt_time
 
-        new_row["latency"] = latency
-        self.network_latency = pd.concat([self.network_latency, new_row], ignore_index=True)
-        return new_row
+    def get_duration(self, task, batch, instance, *args, **kwargs):
+        raise NotImplementedError
 
-    def get_time(self, task_time, **kwargs):
+    def get_iteration_duration(self, batch, instance, *args, **kwargs):
         """
-        Returns a time value from the database.
-        task_time can be: attention_time, routing_time, expert_time
+        Like DatabasePerformanceModel, assumes that prompts are always processed fully (no chunking).
         """
-        t_time = self.db[self._match(**kwargs)][task_time].median()
-        # if not found, predict
-        if math.isnan(t_time):
-            new_row = self.predict_new_row(**kwargs)
-            t_time = new_row[task_time][0]
-        return t_time
-    
-    def get_network_time(self, connection, fan_in, **kwargs):
-        """
-        Returns the network latency from the database.
-        """
-        network_time = self.network_latency[
-            self._match_network(connection=connection, fan_in=fan_in)
-        ]["latency"].median()
-        # if not found, predict
-        if math.isnan(network_time):
-            new_row = self.predict_new_row_network(connection=connection, fan_in=fan_in, **kwargs)
-            network_time = new_row["latency"][0]
-        return network_time
-
-    def get_duration(self, task, batch, instance, connection="NV", fan_in=1, *args, **kwargs):
-        # TODO(keisuke): configure connection (NV and IB) and fan_in factor
-        # Also consider expert popularity
         model = instance.model.name
         hardware = instance.processors[0].name
         tensor_parallel = instance.model.parallelism.tensor_parallelism
-        if task.task_type == TaskType.ATTENTION:
-            prompt_size = task.request.prompt_size
-            token_size = task.request.token_size
-            batch_size = len(batch)
-            attention_time = self.get_time(model=model,
-                                           task_time="attention_time",
-                                           hardware=hardware,
-                                           tensor_parallel=tensor_parallel,
-                                           prompt_size=prompt_size,
-                                           batch_size=batch_size,
-                                           token_size=token_size)
-            routing_time = self.get_time(model=model,
-                                         task_time="routing_time",
-                                         hardware=hardware,
-                                         tensor_parallel=tensor_parallel,
-                                         prompt_size=prompt_size,
-                                         batch_size=batch_size,
-                                         token_size=token_size)
-            network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_size)
-            return (attention_time + routing_time + network_time)
-        elif task.task_type == TaskType.EXPERT:
-            prompt_size = task.request.prompt_size
-            token_size = task.request.token_size
-            batch_size = len(batch)
-            expert_time = self.get_time(model=model,
-                                        task_time="expert_time",
-                                        hardware=hardware,
-                                        tensor_parallel=tensor_parallel,
-                                        prompt_size=prompt_size,
-                                        batch_size=batch_size,
-                                        token_size=token_size,
-                                        batch=batch)
-            network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_size)
-            return (expert_time + network_time)
-        else:
-            raise NotImplementedError
 
-    def get_iteration_duration(self, batch, instance, *args, **kwargs):
-        raise NotImplementedError
+        batch_tokens = 0
+        for task in batch:
+            if isinstance(task, PromptTask):
+                batch_tokens += task.request.prompt_size
+            else:
+                raise NotImplementedError
+            
+        return self.get_prompt_time(model, hardware, tensor_parallel, batch_tokens)
 
 
 def get_duration(*args, **kwargs):
