@@ -432,7 +432,9 @@ class GenerativeMoERequest(Request):
         for i in range(self.n_layers):
             attention_task = self.create_task(task_type=TaskType.ATTENTION,
                                            prompt_size=self.prompt_size,
-                                           layer_id=i)
+                                           layer_id=i,
+                                           is_prompt=True
+                                           )
             if i == 0:
                 self.root_node = attention_task
             # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
@@ -446,7 +448,9 @@ class GenerativeMoERequest(Request):
                 expert_task = self.create_task(task_type=TaskType.EXPERT,
                                               prompt_size=expert_selection_prompt_count[j],
                                               layer_id=i,
-                                              expert_id=j)
+                                              expert_id=j,
+                                              is_prompt=True
+                                              )
                 self.dag.add_edge(attention_task, expert_task)
                 expert_tasks.append(expert_task)
         # then do token phase
@@ -454,7 +458,9 @@ class GenerativeMoERequest(Request):
             for layer_id in range(self.n_layers):
                 attention_task = self.create_task(task_type=TaskType.ATTENTION,
                                                token_size=1,
-                                               layer_id=layer_id)
+                                               layer_id=layer_id,
+                                               is_prompt=False
+                                               )
                 if len(expert_tasks) != 0:
                     for expert_task in expert_tasks:
                         self.dag.add_edge(expert_task, attention_task)
@@ -466,11 +472,15 @@ class GenerativeMoERequest(Request):
                 expert_task_1 = self.create_task(task_type=TaskType.EXPERT,
                                                 token_size=1,
                                                 layer_id=layer_id,
-                                                expert_id=expert_id_1)
+                                                expert_id=expert_id_1,
+                                                is_prompt=False
+                                                )
                 expert_task_2 = self.create_task(task_type=TaskType.EXPERT,
                                                 token_size=1,
                                                 layer_id=layer_id,
-                                                expert_id=expert_id_2)
+                                                expert_id=expert_id_2,
+                                                is_prompt=False
+                                                )
                 self.dag.add_edge(attention_task, expert_task_1)
                 self.dag.add_edge(attention_task, expert_task_2)
                 

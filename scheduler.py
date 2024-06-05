@@ -278,18 +278,14 @@ class MoEScheduler(Scheduler):
                  router,
                  overheads,
                  executor_overheads,
-                 attn_processors,
-                 expert_processors,
                  debug=False):
         super().__init__(application,
                          router,
                          overheads,
                          executor_overheads,
                          debug)
-        self.attn_processors = attn_processors
-        self.expert_processors = expert_processors 
         self.attn_instances = []
-        # global expert id -> list of expert instance
+        # layer id -> expert id -> list of expert instances
         self.expert_instances = {}
         # TODO (keisuke): distinguish between different experts
 
@@ -314,14 +310,22 @@ class MoEScheduler(Scheduler):
         #         else:
         #             raise ValueError(f"Unsupported instance type: \
         #                                 {instance.processors[0].name}")
-    def add_expert_instance(self, instance, expert_id):
+    def add_expert_instance(self, instance, layer_id, expert_id):
         """
         Add expert instance
         """
         self.instances.append(instance)
-        if expert_id not in self.expert_instances:
-            self.expert_instances[expert_id] = []
-        self.expert_instances[expert_id].append(instance)
+        if layer_id not in self.expert_instances:
+            self.expert_instances[layer_id] = {}
+        if expert_id not in self.expert_instances[layer_id]:
+            self.expert_instances[layer_id][expert_id] = []
+        self.expert_instances[layer_id][expert_id].append(instance)
+        
+    def get_expert_instance_list(self, layer_id, expert_id):
+        """
+        Get expert instance list
+        """
+        return self.expert_instances[layer_id][expert_id]
 
     def assert_request_type(self, request):
         assert isinstance(request, GenerativeMoERequest)
@@ -838,15 +842,11 @@ class RandomMoEScheduler(MoEScheduler):
                  router,
                  overheads,
                  executor_overheads,
-                 attn_processors,
-                 expert_processors,
                  debug=False):
-        super.__init__(application,
+        super().__init__(application,
                        router,
                        overheads,
                        executor_overheads,
-                       attn_processors,
-                       expert_processors,
                        debug)
     
     def schedule(self, request, *args, **kwargs):
@@ -856,18 +856,57 @@ class RandomMoEScheduler(MoEScheduler):
         if len(self.attn_instances) == 0 or len(self.expert_instances) == 0:
             raise ValueError("No instances available")
 
-        attn_task = request.root_node
-        expert_task = next(request.successors(attn_task))
-        # enable run-to-completion by chaining
-        attn_task.chain = [expert_task]
+        # attn_task = request.root_node
+        # expert_task = next(request.successors(attn_task))
+        # # enable run-to-completion by chaining
+        # attn_task.chain = [expert_task]
 
-        attn_instance = np.random.choice(self.attn_instances)
-        expert_instance = np.random.choice(self.expert_instances)
-        for node in request.dag.nodes:
-            if isinstance(node, Task):
-                if node.task_type == TaskType.ATTENTION:
-                    node.instance = attn_instance
-                elif node.task_type == TaskType.EXPERT:
-                    node.instance = expert_instance
+        # attn_instance = np.random.choice(self.attn_instances)
+        # expert_instance = np.random.choice(self.expert_instances)
+        # for node in request.dag.nodes:
+        #     if isinstance(node, Task):
+        #         if node.task_type == TaskType.ATTENTION:
+        #             node.instance = attn_instance
+        #         elif node.task_type == TaskType.EXPERT:
+        #             node.instance = expert_instance
+        #     else:
+        #         raise ValueError(f"Unsupported node type: {type(node)}")
+        
+        # we use list here since in DAG there may be multiple expert tasks at one level
+        curr_tasks = [request.root_node]
+        prev_tasks = []
+        # map attn layer id to attn instance id
+        # record at prompt phase and use at token phase
+        attn_instance_map = {}
+        
+        # we enumerate over the tasks in the request DAG
+        # for attention, if it is in the prompt phase, we randomly choose an attn instance, if it is in the token phase, we use the attn instance chosen in the prompt phase
+        # for expert, we randomly choose an expert instance that holds the expert weight
+        
+        while len(curr_tasks) > 0:
+            if curr_tasks[0].task_type == TaskType.ATTENTION:
+                assert(len(curr_tasks) == 1)
+                curr_task = curr_tasks
+                if curr_task.is_prompt:
+                    curr_instance = np.random.choice(self.attn_instances)
+                    attn_instance_map[curr_task.layer_id] = curr_instance
+                else:
+                    curr_instance = attn_instance_map[curr_task.layer_id]
+                curr_task.instance = curr_instance
+                if len(prev_tasks) > 0:
+                    for prev_task in prev_tasks:
+                        # TODO: Yile add bandwidth
+                        self.add_act_transfer(request, prev_task, curr_task, prev_task.instance, curr_task.instance, 0, prev_task.num_tokens)
+            elif curr_tasks[0].task_type == TaskType.EXPERT:
+                for curr_task in curr_tasks:
+                    assert(curr_task.task_type == TaskType.EXPERT)
+                    expert_instances = self.get_expert_instance_list(curr_task.layer_id, curr_task.expert_id)
+                    curr_task.instance = np.random.choice(expert_instances)
+                    for prev_task in prev_tasks:
+                            # TODO: Yile add bandwidth
+                            self.add_act_transfer(request, prev_task, curr_task, prev_task.instance, curr_task.instance, 0, prev_task.num_tokens)
             else:
-                raise ValueError(f"Unsupported node type: {type(node)}")
+                raise ValueError(f"Unsupported task type: {curr_task.task_type}")
+        
+            prev_tasks = curr_tasks
+            curr_task = request.successors(curr_tasks[0])

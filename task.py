@@ -233,6 +233,7 @@ class AttentionTask(Task):
     tokens_per_iteration: int = 1
     current_layer: int = 0
     num_tokens: int = 0
+    is_prompt: bool = False
     task_type: TaskType = TaskType.ATTENTION
 
     def __hash__(self):
@@ -267,6 +268,7 @@ class ExpertTask(Task):
     """
     current_layer: int = 0
     num_tokens: int = 0
+    expert_id: int = 0
     task_type: TaskType = TaskType.EXPERT
 
     def __hash__(self):
