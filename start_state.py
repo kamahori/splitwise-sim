@@ -138,12 +138,34 @@ def moe(start_state_cfg, cluster, applications, **kwargs):
                                                  parallelism=attention_parallelism,
                                                  pre_start=True,
                                                  tag="attention")
-        for server in all_servers[n_attention:n_attention+n_expert]:
+        # we assign 256 experts to the number of instances n_expert
+        # currently we do random assignment
+        expert_instance_assignment = []
+        # TODO: change 256 to number of experts
+        expert_per_instance = 256 // n_expert
+        # currently support instance num divisible by 256
+        assert(256 % n_expert == 0)
+        def flat_to_2d(index):
+            if 0 <= index <= 255:
+                a = index // 8
+                b = index % 8
+                return [a, b]
+        for i in range(n_expert):
+            expert_info = {}
+            for j in range(expert_per_instance):
+                layer_id, expert_id = flat_to_2d(i*expert_per_instance + j)
+                if layer_id not in expert_info:
+                    expert_info[layer_id] = []
+                expert_info[layer_id].append(expert_id)
+            expert_instance_assignment.append(expert_info)
+            
+        for i, server in enumerate(all_servers[n_attention:n_attention+n_expert]):
             for proc_id in range(0, len(server.processors), expert_parallelism.tensor_parallelism):
                 allocator.start_spin_up_instance(instance_cfg=expert_cfg,
                                                  processors=server.processors[proc_id:proc_id+expert_parallelism.tensor_parallelism],
                                                  parallelism=expert_parallelism,
                                                  pre_start=True,
+                                                 expert_info=expert_instance_assignment[i],
                                                  tag="expert")
 
     if split_type == "heterogeneous":

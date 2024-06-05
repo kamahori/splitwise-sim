@@ -840,6 +840,8 @@ class DisaggregatedMOEInstance(Instance):
     No iterations needed for AttentionTasks or ExpertTasks - finish in one forward pass.
     The n-th layer ExpertTask generates a token, for the last model layer n.
     """
+    # layer id -> [expert id, ..], track which expert weights are stored here
+    expert_info: dict = {}
     def __init__(self,
                  instance_id,
                  application,

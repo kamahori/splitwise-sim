@@ -58,6 +58,13 @@ class Application():
         """
         self.instances.append(instance)
         self.scheduler.add_instance(instance)
+        
+    def add_expert_instance(self, instance, layer_id, expert_id):
+        """
+        Application-specific method to add an expert instance to the application.
+        """
+        self.instances.append(instance)
+        self.scheduler.add_expert_instance(instance, layer_id, expert_id)
 
     def get_results(self):
         allocator_results = self.allocator.get_results()
