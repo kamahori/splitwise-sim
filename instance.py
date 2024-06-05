@@ -185,6 +185,10 @@ class Instance():
                                      max_batch_tokens=max_batch_tokens,
                                      max_preemptions=max_preemptions,
                                      **kwargs)
+        elif instance_type == "Attention":
+            return AttentionInstance()
+        elif instance_type == "Expert":
+            return ExpertInstance()
         else:
             raise ValueError(f"Instance type {instance_type} not supported")
 
@@ -827,7 +831,54 @@ class SplitwiseInstance(ORCAInstance):
         new_tasks = [task for task in new_batch if task not in old_batch]
         return preempted_tasks, new_tasks
 
-class MoEInstance(Instance):
+
+class AttentionInstance(ORCAInstance):
     # operates at layer level, finish n layers before generating output token
     # thing that runs on servers
-    None
+    # only increase generated token count when all n layers are done
+    def __init__(self,
+                 instance_id,
+                 application,
+                 name,
+                 tag,
+                 model,
+                 processors,
+                 overheads,
+                 max_batch_size,
+                 max_batch_tokens,
+                 debug=False):
+        super().__init__(instance_id,
+                         application,
+                         name,
+                         tag,
+                         model,
+                         processors,
+                         overheads,
+                         max_batch_size,
+                         debug)
+        self.max_batch_tokens = max_batch_tokens
+
+
+class ExpertInstance(ORCAInstance):
+    # each request has an attention task and expert task, only expert should increase generated token
+    def __init__(self,
+                 instance_id,
+                 application,
+                 name,
+                 tag,
+                 model,
+                 processors,
+                 overheads,
+                 max_batch_size,
+                 max_batch_tokens,
+                 debug=False):
+        super().__init__(instance_id,
+                         application,
+                         name,
+                         tag,
+                         model,
+                         processors,
+                         overheads,
+                         max_batch_size,
+                         debug)
+        self.max_batch_tokens = max_batch_tokens

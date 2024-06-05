@@ -31,7 +31,7 @@ class ExpertArchitecture(ModelArchitecture):
 
 @dataclass(kw_only=True)
 class MixtralArchitecture(ModelArchitecture):
-    None
+    top_k_experts: int
 
 
 @dataclass(kw_only=True)

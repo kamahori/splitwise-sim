@@ -21,6 +21,8 @@ def load_start_state(start_state_cfg, **kwargs):
         uniform(start_state_cfg, **kwargs)
     elif "splitwise" in state_type:
         splitwise(start_state_cfg, **kwargs)
+    elif "moe" in state_type:
+        moe(start_state_cfg, **kwargs)
     else:
         raise ValueError(f"Unknown start state type: {state_type}")
 
@@ -110,8 +112,57 @@ def splitwise(start_state_cfg, cluster, applications, **kwargs):
 
 
 def moe(start_state_cfg, cluster, applications, **kwargs):
-    None
-    # application: logical entity, many instances
-    # instance: one model-serving unit
-    # one application, n instances for attn and m for experts
-    # check that model arch is mixtral
+    application = applications[start_state_cfg.application_id]
+    allocator = application.allocator
+    servers = cluster.servers
+
+    attention_cfg = start_state_cfg.attention
+    expert_cfg = start_state_cfg.expert
+    attention_parallelism = ModelParallelism(pipeline_parallelism=attention_cfg.pipeline_parallelism,
+                                             tensor_parallelism=attention_cfg.tensor_parallelism)
+    expert_parallelism = ModelParallelism(pipeline_parallelism=expert_cfg.pipeline_parallelism,
+                                          tensor_parallelism=expert_cfg.tensor_parallelism)
+
+    split_type = start_state_cfg.split_type
+
+    if split_type == "homogeneous":
+        n_attention = attention_cfg.num_instances
+        n_expert = expert_cfg.num_instances
+
+        all_servers = [server for sku_name in servers for server in servers[sku_name]]
+        for server in all_servers[:n_attention]:
+            for proc_id in range(0, len(server.processors), attention_parallelism.tensor_parallelism):
+                allocator.start_spin_up_instance(instance_cfg=attention_cfg,
+                                                 processors=server.processors[proc_id:proc_id+attention_parallelism.tensor_parallelism],
+                                                 parallelism=attention_parallelism,
+                                                 pre_start=True,
+                                                 tag="attention")
+        for server in all_servers[n_attention:n_attention+n_expert]:
+            for proc_id in range(0, len(server.processors), expert_parallelism.tensor_parallelism):
+                allocator.start_spin_up_instance(instance_cfg=expert_cfg,
+                                                 processors=server.processors[proc_id:proc_id+expert_parallelism.tensor_parallelism],
+                                                 parallelism=expert_parallelism,
+                                                 pre_start=True,
+                                                 tag="expert")
+
+    if split_type == "heterogeneous":
+        attention_instances = attention_cfg.instance_names
+        expert_instances = expert_cfg.instance_names
+        for sku_name in servers:
+            for server in servers[sku_name]:
+                if sku_name in attention_instances:
+                    for proc_id in range(0, len(server.processors), attention_parallelism.tensor_parallelism):
+                        allocator.start_spin_up_instance(instance_cfg=attention_cfg,
+                                                        processors=server.processors[proc_id:proc_id+attention_parallelism.tensor_parallelism],
+                                                        parallelism=attention_parallelism,
+                                                        pre_start=True,
+                                                        tag="attention")
+                elif sku_name in expert_instances:
+                    for proc_id in range(0, len(server.processors), expert_parallelism.tensor_parallelism):
+                        allocator.start_spin_up_instance(instance_cfg=expert_cfg,
+                                                        processors=server.processors[proc_id:proc_id+expert_parallelism.tensor_parallelism],
+                                                        parallelism=expert_parallelism,
+                                                        pre_start=True,
+                                                        tag="expert")
+                else:
+                    raise ValueError(f"Unsupported sku_name: {sku_name}")
