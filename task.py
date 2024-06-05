@@ -230,7 +230,6 @@ class AttentionTask(Task):
     Attention task represents the attention phase in a mixture of experts model layer.
     """
     layer_id: int
-    token_size: int
     tokens_per_iteration: int = 1
     current_layer: int = 0
     num_tokens: int = 0

@@ -130,6 +130,7 @@ def moe(start_state_cfg, cluster, applications, **kwargs):
         n_expert = expert_cfg.num_instances
 
         all_servers = [server for sku_name in servers for server in servers[sku_name]]
+        # for attention, we will assign one attention instance for one server
         for server in all_servers[:n_attention]:
             for proc_id in range(0, len(server.processors), attention_parallelism.tensor_parallelism):
                 allocator.start_spin_up_instance(instance_cfg=attention_cfg,

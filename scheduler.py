@@ -848,3 +848,26 @@ class RandomMoEScheduler(MoEScheduler):
                        attn_processors,
                        expert_processors,
                        debug)
+    
+    def schedule(self, request, *args, **kwargs):
+        """
+        Assigns all nodes in request to a random instance
+        """
+        if len(self.attn_instances) == 0 or len(self.expert_instances) == 0:
+            raise ValueError("No instances available")
+
+        attn_task = request.root_node
+        expert_task = next(request.successors(attn_task))
+        # enable run-to-completion by chaining
+        attn_task.chain = [expert_task]
+
+        attn_instance = np.random.choice(self.attn_instances)
+        expert_instance = np.random.choice(self.expert_instances)
+        for node in request.dag.nodes:
+            if isinstance(node, Task):
+                if node.task_type == TaskType.ATTENTION:
+                    node.instance = attn_instance
+                elif node.task_type == TaskType.EXPERT:
+                    node.instance = expert_instance
+            else:
+                raise ValueError(f"Unsupported node type: {type(node)}")
