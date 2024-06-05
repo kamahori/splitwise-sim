@@ -1,0 +1,6 @@
+_target_: model.AttentionArchitecture
+name: mixtral-8x7b-attention
+num_layers: 1
+hidden_size: 128
+num_heads: 32
+top_k_experts: 2

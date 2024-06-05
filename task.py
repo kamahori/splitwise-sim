@@ -11,7 +11,9 @@ from simulator import clock, schedule_event, cancel_event, reschedule_event
 class TaskType(IntEnum):
     COMPUTE = 0
     PROMPT = 1
-    TOKEN = 2
+    TOKEN = 2,
+    ATTENTION = 3,
+    EXPERT = 4
 
 
 @dataclass(kw_only=True)
@@ -60,6 +62,10 @@ class Task(Node):
             return PromptTask(**kwargs)
         elif task_type == TaskType.TOKEN:
             return TokenTask(**kwargs)
+        elif task_type == TaskType.ATTENTION:
+            return AttentionTask(**kwargs)
+        elif task_type == TaskType.EXPERT:
+            return ExpertTask(**kwargs)
         else:
             raise ValueError(f"Invalid TaskType {task_type}")
 
@@ -213,6 +219,77 @@ class TokenTask(Task):
                                                 self.request.token_size - 1
 
         # manage memory
+        if self.cleanup_memory:
+            self.instance.free_memory(self.request, self.request.memory)
+            self.request.memory = 0
+
+
+@dataclass(kw_only=True)
+class AttentionTask(Task):
+    """
+    Attention task represents the attention phase in a mixture of experts model layer.
+    """
+    current_layer: int = 0
+    num_tokens: int = 0
+    is_prompt: bool = False
+    task_type: TaskType = TaskType.ATTENTION
+
+    def __hash__(self):
+        return hash(self.node_id)
+
+    @property
+    def memory(self):
+        return self.request.estimate_kv_cache_size(num_tokens=self.num_tokens,
+                                                   model=self.instance.model)
+
+    def max_memory(self, instance):
+        return self.request.estimate_kv_cache_size(num_tokens=self.num_tokens,
+                                                   model=instance.model)
+
+    def run(self):
+        super().run() # might need to change this since it logs prompt_start_timestamp
+        self.instance.alloc_memory(self.request, self.memory)
+        self.request.memory += self.memory
+
+    def complete(self):
+        super().complete()
+        self.instance.sched_pending_tokens -= self.num_tokens
+        if self.cleanup_memory:
+            self.instance.free_memory(self.request, self.request.memory)
+            self.request.memory = 0
+
+
+@dataclass(kw_only=True)
+class ExpertTask(Task):
+    """
+    Expert task represents the sparse expert phase in a mixture of experts model layer.
+    """
+    current_layer: int = 0
+    num_tokens: int = 0
+    expert_id: int = 0
+    task_type: TaskType = TaskType.EXPERT
+
+    def __hash__(self):
+        return hash(self.node_id)
+
+    @property
+    def memory(self):
+        return self.num_tokens * self.instance.model.hidden_size * self.instance.model.size.dtype_size
+
+    def max_memory(self, instance):
+        return self.num_tokens * instance.model.hidden_size * instance.model.size.dtype_size
+
+    def run(self):
+        super().run() # might need to change this since it logs prompt_start_timestamp
+        self.instance.alloc_memory(self.request, self.memory)
+        self.request.memory += self.memory
+
+    def complete(self):
+        super().complete()
+        self.instance.sched_pending_tokens -= self.num_tokens
+        if self.current_layer == self.instance.num_layers:
+            self.request.generated_tokens(1)
+            self.request.processed_tokens(self.num_tokens)
         if self.cleanup_memory:
             self.instance.free_memory(self.request, self.request.memory)
             self.request.memory = 0

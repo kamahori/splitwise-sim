@@ -16,6 +16,25 @@ class LLMArchitecture(ModelArchitecture):
 
 
 @dataclass(kw_only=True)
+class AttentionArchitecture(ModelArchitecture):
+    hidden_size: int
+    num_heads: int
+    top_k_experts: int
+
+
+@dataclass(kw_only=True)
+class ExpertArchitecture(ModelArchitecture):
+    hidden_size: int
+    num_experts: int
+    top_k_experts: int
+
+
+@dataclass(kw_only=True)
+class MixtralArchitecture(ModelArchitecture):
+    top_k_experts: int
+
+
+@dataclass(kw_only=True)
 class ModelParallelism():
     """
     Captures the different parallelisms of a Model.

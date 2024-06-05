@@ -1,0 +1,17 @@
+state_type: moe_${start_state.attention.num_instances}_${start_state.expert.num_instances}
+application_id: 0
+split_type: homogeneous
+attention:
+  instance_type: DisaggregatedMOEInstance
+  max_batch_tokens: 256
+  num_instances: 1
+  pipeline_parallelism: 1
+  tensor_parallelism: 8
+  instance_names: ["dgx-h100"]
+expert:
+  instance_type: DisaggregatedMOEInstance
+  max_batch_tokens: 256
+  num_instances: 1
+  pipeline_parallelism: 1
+  tensor_parallelism: 8
+  instance_names: ["dgx-h100"]

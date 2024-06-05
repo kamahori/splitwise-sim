@@ -1,0 +1,4 @@
+_target_: model.MixtralArchitecture
+name: mixtral
+num_layers: 32
+top_k_experts: 2

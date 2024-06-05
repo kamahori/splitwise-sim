@@ -60,13 +60,36 @@ class Allocator(ABC):
                                         processors=processors,
                                         overheads=self.instance_overheads,
                                         debug=self.debug)
+        
+    def start_spin_up_expert_instance(self,
+                               instance_cfg,
+                               processors,
+                               parallelism,
+                               expert_info,
+                               tag=None):
+        """
+        Spin up a new MoE instance of the application on specified processors.
+        """
+        model_architecture = self.application.model_architecture
+        model_size = self.application.model_size
+        model = model_repo.get_model(model_architecture=model_architecture,
+                                     model_size=model_size,
+                                     model_parallelism=parallelism)
+        instance = Instance.from_config(instance_cfg=instance_cfg,
+                                        instance_id=next(self.total_instances),
+                                        application=self.application,
+                                        name=processors[0].name,
+                                        tag=tag,
+                                        model=model,
+                                        processors=processors,
+                                        overheads=self.instance_overheads,
+                                        debug=self.debug)
+        instance.expert_info = expert_info
 
-        def finish_spin_up():
-            self.finish_spin_up_instance(instance)
-        if pre_start is True:
-            finish_spin_up()
-        else:
-            schedule_event(self.overheads.spin_up, finish_spin_up)
+        for layer_id in expert_info:
+            for expert_id in expert_info[layer_id]:
+                self.application.add_expert_instance(instance, layer_id, expert_id)
+                
 
     def finish_spin_up_instance(self, instance):
         """
