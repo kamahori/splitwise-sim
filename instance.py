@@ -892,7 +892,7 @@ class DisaggregatedMOEInstance(Instance):
                 task.num_tokens <= self.max_batch_tokens:
                 print("adding task to batch")
                 self.add_to_batch(task)
-                self.run_batch(task)
+                self.run_batch()
 
     def form_batch(self):
         """
@@ -909,8 +909,16 @@ class DisaggregatedMOEInstance(Instance):
     def run_batch(self):
         for task in self.batch:
             print(f"Running task on instance {self.instance_id}")
-            task.run()
-            self.remove_pending_task(task)
+            if task.state == NodeState.QUEUED:
+                task.run()
+            elif task.state == NodeState.BLOCKED:
+                task.run_after_preempt()
+            elif task.state == NodeState.RUNNING:
+                pass
+            else:
+                raise ValueError(f"Unexpected task state {task.state} in start_iteration")
+            if task in self.pending_queue:
+                self.remove_pending_task(task)
         duration = get_duration(task=self.batch[0], batch=self.batch, instance=self)
         schedule_event(duration, lambda instance=self: instance.complete_batch())
 

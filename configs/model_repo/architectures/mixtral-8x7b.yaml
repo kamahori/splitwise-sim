@@ -1,4 +1,5 @@
 _target_: model.MixtralArchitecture
-name: mixtral
+name: mixtral-8x7b
+hidden_size: 4096
 num_layers: 32
 top_k_experts: 2

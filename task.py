@@ -288,7 +288,7 @@ class ExpertTask(Task):
     def complete(self):
         super().complete()
         self.instance.sched_pending_tokens -= self.num_tokens
-        if self.current_layer == self.instance.num_layers:
+        if self.current_layer == self.instance.model.architecture.num_layers:
             self.request.generated_tokens(1)
             self.request.processed_tokens(self.num_tokens)
         if self.cleanup_memory:

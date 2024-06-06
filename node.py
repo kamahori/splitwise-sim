@@ -43,12 +43,14 @@ class Node():
     def arrive(self):
         assert self.state == NodeState.NONE
         self.metrics.arrival_timestamp = clock()
+        print("arrival time set to", self.metrics.arrival_timestamp)
         self.state = NodeState.QUEUED
 
     def run(self):
         assert self.state == NodeState.QUEUED
         self.metrics.run_timestamp = clock()
         self.metrics.start_timestamp = clock()
+        print("arrival time", self.metrics.arrival_timestamp)
         self.metrics.queue_time += clock() - self.metrics.arrival_timestamp
         if self.request.root_node is self:
             self.request.metrics.prompt_start_timestamp = clock()

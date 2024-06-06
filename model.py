@@ -31,6 +31,7 @@ class ExpertArchitecture(ModelArchitecture):
 
 @dataclass(kw_only=True)
 class MixtralArchitecture(ModelArchitecture):
+    hidden_size: int
     top_k_experts: int
 
 
@@ -73,6 +74,10 @@ class Model():
     @property
     def size_per_processor(self):
         return self.size.total_size / self.parallelism.num_processors
+
+    @property
+    def hidden_size(self):
+        return self.architecture.hidden_size
 
 
 @dataclass(kw_only=True)

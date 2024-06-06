@@ -326,8 +326,9 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                     self.expert_time_predictors[(model, hardware, tensor_parallel)] = interp1d(
                                                                     x, y, fill_value="extrapolate")
         
-        for connection in self.db["connection"].unique():
-            for fan_in in self.db["fan_in"].unique():
+        for connection in self.network_latency["connection"].unique():
+            print(connection)
+            for fan_in in self.network_latency["fan_in"].unique():
                 mask = (self.network_latency["connection"] == connection) & \
                         (self.network_latency["fan_in"] == fan_in)
                 db_subset = self.network_latency[mask].copy()
@@ -335,7 +336,7 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
                     continue
                 x = db_subset[["data_size", "latency"]].groupby("data_size").median().index
                 y = db_subset[["data_size", "latency"]].groupby("data_size").median()["latency"]
-                self.network_time_predictors[(connection, fan_in)] = interp1d(
+                self.network_time_predictors[(connection, int(fan_in))] = interp1d(
                                                                 x, y, fill_value="extrapolate")
 
     def get_time(self, name, **kwargs):
@@ -385,7 +386,7 @@ class DisaggregatedMOEPerformanceModel(PerformanceModel):
             
         time_args = {'model': instance.model.name,
                      'hardware': instance.processors[0].name,
-                     'tensor_parallelism': instance.model.parallelism.tensor_parallelism,
+                     'tensor_parallel': instance.model.parallelism.tensor_parallelism,
                      'batch_tokens': batch_tokens}
         
         network_time = self.get_network_time(connection=connection, fan_in=fan_in, data_size=batch_tokens)
@@ -504,7 +505,7 @@ class MOEPromptPerformanceModel(PerformanceModel):
             
         time_args = {'model': instance.model.name,
                      'hardware': instance.processors[0].name,
-                     'tensor_parallelism': instance.model.parallelism.tensor_parallelism,
+                     'tensor_parallel': instance.model.parallelism.tensor_parallelism,
                      'batch_tokens': batch_tokens}
         attention_time = self.get_time("attention", **time_args)
         routing_time = self.get_time("routing", **time_args)

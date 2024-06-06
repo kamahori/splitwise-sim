@@ -51,6 +51,7 @@ class Simulator:
         if delay == 0:
             action()
             return None
+        print("Delay", delay)
         event = Event(self.time + delay, action)
         heapq.heappush(self.events, event)
         return event
@@ -66,6 +67,7 @@ class Simulator:
         Reschedule an event by cancelling and scheduling it again.
         """
         self.cancel(event)
+        print("Reschedule", delay)
         return self.schedule(delay, event.action)
 
     def run(self):
@@ -78,6 +80,7 @@ class Simulator:
                 self.deleted_events.remove(event)
                 continue
             self.time = event.time
+            print(f"Time: {self.time}")
             event.action()
             self.logger.debug(f"{event.time},{event.action}")
 
@@ -107,6 +110,7 @@ class TraceSimulator(Simulator):
         Load requests from the trace as arrival events.
         """
         for request in self.trace.requests:
+            print("load_trace", request.arrival_timestamp)
             self.schedule(request.arrival_timestamp,
                           lambda request=request: self.router.request_arrival(request))
 
@@ -170,6 +174,7 @@ def schedule_event(*args):
     """
     Schedule an event in the simulator at desired delay.
     """
+    print("schedule_event")
     return sim.schedule(*args)
 
 def cancel_event(*args):

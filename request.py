@@ -421,7 +421,7 @@ class GenerativeMoERequest(Request):
         # TODO (keisuke): now selecting the expert based on the popularity info here, 
         # but ideally we want the simulator to be deterministic
         np.random.seed(0)
-        expert_popularity_filename = "/home/yilegu/fiddler/benchmarks/results/popularity/mixtral_8x7b_instruct/expert_popularity_machine_learning.json"
+        expert_popularity_filename = "/home/keisuke/splitwise-sim/data/expert_popularity_college_computer_science.json"
         with open(expert_popularity_filename, "r") as f:
             expert_popularity = json.load(f)
             expert_selection_prob = np.array(expert_popularity["expert_popularity"]) # (32, 8)
@@ -443,7 +443,7 @@ class GenerativeMoERequest(Request):
                 print("setting root node")
                 self.root_node = attention_task
             # TODO (keisuke): determine number of tokens for each based on expert popularity info, for now just equal split to 8 experts
-            expert_selection_prompt = np.random.choice(8, size=(self.prompt_size, 2), p=expert_selection_prob[i])
+            expert_selection_prompt = np.random.choice(8, size=(int(self.prompt_size), 2), p=expert_selection_prob[i])
             # count the appearance of each value (0-7) in the `expert_selection_prompt`
             expert_selection_prompt_count = np.zeros(8)
             for j in range(8):
@@ -459,7 +459,7 @@ class GenerativeMoERequest(Request):
                 self.dag.add_edge(attention_task, expert_task)
                 expert_tasks.append(expert_task)
         # then do token phase
-        for token_id in range(self.token_size):
+        for token_id in range(int(self.token_size)):
             for layer_id in range(self.n_layers):
                 attention_task = self.create_task(task_type=TaskType.ATTENTION,
                                                num_tokens=1,

@@ -133,7 +133,8 @@ class Link():
         """
         FIXME: this can be shorter than prompt duration
         """
-        return flow.size / (self.bandwidth - self.bandwidth_used)
+        return 0 # as network latency is computed in performance_model
+        # return flow.size / (self.bandwidth - self.bandwidth_used)
 
     def run_flow(self, flow):
         """
